@@ -1,0 +1,2636 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>[DEV] ScoreOps Control Center</title>
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 2. Google Font (Inter) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <style src="style.css"></style>
+     <script type="module">
+        // Import Firebase services
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInAnonymously, 
+            signInWithCustomToken, 
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            getDoc, 
+            setDoc, 
+            updateDoc, 
+            addDoc, 
+            collection, 
+            onSnapshot, 
+            serverTimestamp,
+            query,
+            orderBy,
+            where,
+            limit,
+            setLogLevel,
+            deleteDoc,
+            getDocs
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL STATE ---
+        let app, db, auth;
+        let userId;
+        let appId;
+        
+        // --- TIME SYNC VARIABLES ---
+        let globalTimeOffset = 0; 
+
+        // --- DEFAULTS ---
+        const DEFAULT_COLORS = {
+            teamA: { start: '#1e3a8a', end: '#111827' }, // Navy Blue
+            teamB: { start: '#991b1b', end: '#450a0a' }  // Dark Red
+        };
+        
+        // Firebase config
+        const YOUR_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyCOzLPUwO6s0pDRSYsHQE0J4iq-rukY8F8",
+            authDomain: "broadcast-control-center.firebaseapp.com",
+            projectId: "broadcast-control-center",
+            storageBucket: "broadcast-control-center.firebasestorage.app",
+            messagingSenderId: "666737783784",
+            appId: "1:666737783784:web:9b58af1c009f8c476e2a5d",
+            measurementId: "G-08KN8HW3S9"
+        };
+        
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : YOUR_FIREBASE_CONFIG;
+            
+        appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // --- SPORT CONFIGURATIONS ---
+        const SPORT_CONFIG = {
+            football: {
+                label: "Football (American)",
+                periods: [ {val: 'PREGAME', label: 'Pre-Game'}, {val: 'Q1', label: 'Quarter 1'}, {val: 'Q2', label: 'Quarter 2'}, {val: 'HALFTIME', label: 'Halftime'}, {val: 'Q3', label: 'Quarter 3'}, {val: 'Q4', label: 'Quarter 4'}, {val: 'OT', label: 'Overtime'}, {val: 'FINAL', label: 'Final'} ],
+                buttonHtml: (team) => `
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <button data-score-team="${team}" data-score-points="6" data-score-label="TD" class="score-btn w-full bg-green-600 hover:opacity-90 text-white font-medium py-2 px-3 rounded-sm">+6 (TD)</button>
+                        <button data-score-team="${team}" data-score-points="1" data-score-label="PAT" class="score-btn w-full bg-green-700 hover:opacity-90 text-white font-medium py-2 px-3 rounded-sm">+1 (PAT)</button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <button data-score-team="${team}" data-score-points="2" data-score-label="Safety" class="score-btn w-full bg-green-800 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm">+2 (Safe)</button>
+                        <button data-score-team="${team}" data-score-points="3" data-score-label="FG" class="score-btn w-full bg-blue-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm">+3 (FG)</button>
+                    </div>
+                    <button data-score-team="${team}" data-score-points="-1" data-score-label="Correction" class="score-btn w-full bg-red-900/50 hover:bg-red-800 text-red-200 font-medium py-1 px-4 rounded-sm text-xs mt-1">-1 (Correct)</button>
+                `
+            },
+            basketball: {
+                label: "Basketball",
+                periods: [ {val: 'PREGAME', label: 'Pre-Game'}, {val: 'H1', label: '1st Half'}, {val: 'HALFTIME', label: 'Halftime'}, {val: 'H2', label: '2nd Half'}, {val: 'OT', label: 'Overtime'}, {val: 'FINAL', label: 'Final'} ],
+                buttonHtml: (team) => `
+                    <div class="grid grid-cols-3 gap-1 mb-2">
+                        <button data-score-team="${team}" data-score-points="3" data-score-label="3-PT" class="score-btn w-full bg-green-600 hover:opacity-90 text-white font-medium py-3 px-1 rounded-sm text-sm">+3</button>
+                        <button data-score-team="${team}" data-score-points="2" data-score-label="2-PT" class="score-btn w-full bg-blue-600 hover:opacity-90 text-white font-medium py-3 px-1 rounded-sm text-sm">+2</button>
+                        <button data-score-team="${team}" data-score-points="1" data-score-label="FT" class="score-btn w-full bg-gray-600 hover:opacity-90 text-white font-medium py-3 px-1 rounded-sm text-sm">+1</button>
+                    </div>
+                    <button data-score-team="${team}" data-score-points="-1" data-score-label="Correction" class="score-btn w-full bg-red-900/50 hover:bg-red-800 text-red-200 font-medium py-1 px-4 rounded-sm text-xs mt-1">-1 (Correct)</button>
+                `
+            },
+            hockey: {
+                label: "Ice Hockey",
+                periods: [ {val: 'PREGAME', label: 'Pre-Game'}, {val: 'P1', label: 'Period 1'}, {val: 'P2', label: 'Period 2'}, {val: 'P3', label: 'Period 3'}, {val: 'OT', label: 'Overtime'}, {val: 'SO', label: 'Shootout'}, {val: 'FINAL', label: 'Final'} ],
+                buttonHtml: (team) => `
+                    <button data-score-team="${team}" data-score-points="1" data-score-label="Goal" class="score-btn w-full bg-blue-600 hover:opacity-90 text-white font-bold py-4 px-4 rounded-sm shadow-sm mb-2 text-xl tracking-wider">GOAL (+1)</button>
+                    <button data-score-team="${team}" data-score-points="-1" data-score-label="Correction" class="score-btn w-full bg-red-900/50 hover:bg-red-800 text-red-200 font-medium py-1 px-4 rounded-sm text-xs">-1 (Correct)</button>
+                `
+            },
+            soccer: {
+                label: "Soccer / Futsal",
+                periods: [ {val: 'PREGAME', label: 'Pre-Game'}, {val: 'H1', label: '1st Half'}, {val: 'HALFTIME', label: 'Halftime'}, {val: 'H2', label: '2nd Half'}, {val: 'ET1', label: 'Extra Time 1'}, {val: 'ET2', label: 'Extra Time 2'}, {val: 'PK', label: 'Penalties'}, {val: 'FINAL', label: 'Final'} ],
+                buttonHtml: (team) => `
+                    <button data-score-team="${team}" data-score-points="1" data-score-label="Goal" class="score-btn w-full bg-green-600 hover:opacity-90 text-white font-bold py-4 px-4 rounded-sm shadow-sm mb-2 text-xl tracking-wider">GOAL (+1)</button>
+                    <button data-score-team="${team}" data-score-points="-1" data-score-label="Correction" class="score-btn w-full bg-red-900/50 hover:bg-red-800 text-red-200 font-medium py-1 px-4 rounded-sm text-xs">-1 (Correct)</button>
+                `
+            },
+            volleyball: {
+                label: "Volleyball",
+                periods: [ {val: 'PREGAME', label: 'Warmup'}, {val: 'SET1', label: 'Set 1'}, {val: 'SET2', label: 'Set 2'}, {val: 'SET3', label: 'Set 3'}, {val: 'SET4', label: 'Set 4'}, {val: 'SET5', label: 'Set 5'}, {val: 'FINAL', label: 'Final'} ],
+                buttonHtml: (team) => `
+                    <button data-score-team="${team}" data-score-points="1" data-score-label="Point" class="score-btn w-full bg-yellow-600 hover:opacity-90 text-black font-bold py-4 px-4 rounded-sm shadow-sm mb-2 text-xl tracking-wider">POINT (+1)</button>
+                    <button data-score-team="${team}" data-score-points="-1" data-score-label="Correction" class="score-btn w-full bg-red-900/50 hover:bg-red-800 text-red-200 font-medium py-1 px-4 rounded-sm text-xs">-1 (Correct)</button>
+                `
+            },
+            generic: {
+                label: "Universal / Generic",
+                periods: [ {val: 'READY', label: 'Ready'}, {val: 'LIVE', label: 'Live'}, {val: 'BREAK', label: 'Break'}, {val: 'FINAL', label: 'Final'} ],
+                buttonHtml: (team) => `
+                    <div class="grid grid-cols-3 gap-1 mb-2">
+                        <button data-score-team="${team}" data-score-points="1" data-score-label="+1" class="score-btn w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-1 rounded-sm">+1</button>
+                        <button data-score-team="${team}" data-score-points="2" data-score-label="+2" class="score-btn w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-1 rounded-sm">+2</button>
+                        <button data-score-team="${team}" data-score-points="5" data-score-label="+5" class="score-btn w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-1 rounded-sm">+5</button>
+                    </div>
+                    <button data-score-team="${team}" data-score-points="-1" data-score-label="Correction" class="score-btn w-full bg-red-900/50 hover:bg-red-800 text-red-200 font-medium py-1 px-4 rounded-sm text-xs mt-1">-1 (Correct)</button>
+                `
+            },
+            rugby: {
+                label: "Rugby Union",
+                periods: [ {val: 'PREGAME', label: 'Pre-Game'}, {val: 'H1', label: '1st Half'}, {val: 'HALFTIME', label: 'Halftime'}, {val: 'H2', label: '2nd Half'}, {val: 'FINAL', label: 'Final'} ],
+                buttonHtml: (team) => `
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <button data-score-team="${team}" data-score-points="5" data-score-label="Try" class="score-btn w-full bg-green-600 hover:opacity-90 text-white font-medium py-2 px-3 rounded-sm">+5 (Try)</button>
+                        <button data-score-team="${team}" data-score-points="2" data-score-label="Conversion" class="score-btn w-full bg-green-700 hover:opacity-90 text-white font-medium py-2 px-3 rounded-sm">+2 (Conv)</button>
+                    </div>
+                    <button data-score-team="${team}" data-score-points="3" data-score-label="Penalty/Drop" class="score-btn w-full bg-blue-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm mb-2">+3 (Pen/Drop)</button>
+                    <button data-score-team="${team}" data-score-points="-1" data-score-label="Correction" class="score-btn w-full bg-red-900/50 hover:bg-red-800 text-red-200 font-medium py-1 px-4 rounded-sm text-xs mt-1">-1 (Correct)</button>
+                `
+            }
+        };
+
+        // --- TIER CONFIGURATION ---
+        let TIER_CONFIG = {
+            free: { id: 'free', label: 'Free', color: 'gray', canCreate: false, allowLogos: false, allowGraphics: false, allowAutoHide: false, allowCommentary: false, maxMacros: 0, maxMacroSteps: 0 },
+            basic: { id: 'basic', label: 'Basic', color: 'cyan', canCreate: true, allowLogos: true, allowGraphics: true, allowAutoHide: false, allowCommentary: true, maxMacros: 3, maxMacroSteps: 3 },
+            pro: { id: 'pro', label: 'Pro', color: 'yellow', canCreate: true, allowLogos: true, allowGraphics: true, allowAutoHide: true, allowCommentary: true, maxMacros: 10, maxMacroSteps: 10 },
+            enterprise: { id: 'enterprise', label: 'Enterprise', color: 'purple', canCreate: true, allowLogos: true, allowGraphics: true, allowAutoHide: true, allowCommentary: true, maxMacros: 999, maxMacroSteps: 99 }
+        };
+
+        // --- DOM ELEMENTS ---
+        const baseTitle = document.title;
+        const loader = document.getElementById('app-loader');
+        const authView = document.getElementById('auth-view');
+        const controlPanel = document.getElementById('control-panel');
+        const messageToast = document.getElementById('message-toast');
+        const messageToastText = document.getElementById('message-toast-text');
+        
+        // --- CONTROL PANEL STATE ---
+        const CP_SETTINGS_KEY = 'broadcastControlSettings';
+        const CP_MACROS_KEY = 'broadcastMacros_v2';
+        var CP = {
+            gameId: null,
+            operatorName: null,
+            isAnonymous: true,
+            isOwner: false,
+            license: null, 
+            currentTier: TIER_CONFIG.free,
+            gameDocRef: null,
+            settingsDocRef: null,
+            eventsCollectionRef: null,
+            operatorLogCollectionRef: null,
+            usersCollectionRef: null, 
+            localState: {
+                teamAName: "Home",
+                teamBName: "Away",
+                teamALogo: "",
+                teamBLogo: "",
+                teamAColor1: "#1e3a8a",
+                teamAColor2: "#111827",
+                teamBColor1: "#991b1b",
+                teamBColor2: "#450a0a",
+                scoreA: 0,
+                scoreB: 0,
+                clock: "15:00",
+                quarter: "Q1",
+                activeGraphic: null,
+                graphicDuration: 0,
+                clockState: "stopped",
+                lastClockTimestamp: null,
+                clockDirection: 'down', 
+                possession: "none",
+                visualMode: "rounded", // Default
+                stagedEvents: [],
+                stagedFields: []
+            },
+            globalState: {},
+            channelSettings: {
+                requireLogin: false,
+                password: null,
+                ownerId: null,
+                ownerEmail: null,
+                sportType: 'football',
+                visualMode: 'rounded',
+                nickname: ''
+            },
+            settings: {
+                theme: 'dark',
+                layout: 'wide',
+                logFontSize: 'sm',
+                audioCues: true,
+                confirmGlobalReset: true,
+                compactLog: false
+            },
+            macros: [], 
+            editingMacroActions: [],
+            macrosSharedRef: null,
+            macrosPersonalRef: null,
+            macrosSharedUnsub: null,
+            macrosPersonalUnsub: null,
+            activeGraphicTimer: null, 
+            listeners: [],
+            combinedLogEvents: { public: [], operator: [] },
+            confirmAction: null, 
+            confirmData: null,
+            heartbeatInterval: null 
+        };
+        
+        // --- CLOCK STATE ---
+        let clockInterval = null;
+        let clockStartTimeMs = 0;
+        let clockStartTimestamp = 0;
+
+        // --- AUDIO ---
+        let audioCtx;
+        function playAudioCue(type) {
+            if (!CP.settings.audioCues) return;
+            if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            
+            switch (type) {
+                case 'click': oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.05); oscillator.start(audioCtx.currentTime); oscillator.stop(audioCtx.currentTime + 0.05); break;
+                case 'deploy': oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(1046.50, audioCtx.currentTime); gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1); oscillator.start(audioCtx.currentTime); oscillator.stop(audioCtx.currentTime + 0.1); break;
+                case 'global': oscillator.type = 'triangle'; oscillator.frequency.setValueAtTime(1318.51, audioCtx.currentTime); gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.08); oscillator.start(audioCtx.currentTime); oscillator.stop(audioCtx.currentTime + 0.08); break;
+                case 'error': oscillator.type = 'square'; oscillator.frequency.setValueAtTime(155.56, audioCtx.currentTime); gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.15); oscillator.start(audioCtx.currentTime); oscillator.stop(audioCtx.currentTime + 0.15); break;
+            }
+        }
+
+        // --- TIME SYNC & UTILS ---
+        async function calculateServerTimeOffset(user) {
+            if (!user) return;
+            const syncRef = doc(db, `artifacts/${appId}/users/${user.uid}/sync/time`);
+            try {
+                await setDoc(syncRef, { timestamp: serverTimestamp() });
+                const snap = await getDoc(syncRef);
+                if (snap.exists()) {
+                    const serverTime = snap.data().timestamp.toMillis();
+                    const localTime = Date.now();
+                    globalTimeOffset = serverTime - localTime;
+                }
+            } catch (e) { globalTimeOffset = 0; }
+        }
+
+        function showToast(message, isError = false) {
+            messageToastText.innerText = message;
+            messageToast.classList.remove('bg-red-600', 'bg-blue-600', 'translate-y-20', 'opacity-0');
+            messageToast.classList.add(isError ? 'bg-red-600' : 'bg-blue-600', 'translate-y-0', 'opacity-100');
+            setTimeout(() => { messageToast.classList.remove('translate-y-0', 'opacity-100'); messageToast.classList.add('translate-y-20', 'opacity-0'); }, 3000);
+        }
+        
+        function parseTime(timeString) {
+            try {
+                if (!timeString) return 0;
+                const parts = timeString.split(':');
+                const minutes = parseInt(parts[0], 10) || 0;
+                const seconds = parseInt(parts[1], 10) || 0;
+                return (minutes * 60 + seconds) * 1000;
+            } catch (e) { return 0; }
+        }
+
+        function formatTime(ms) {
+            const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
+        // --- CLIENT CLOCK LOOP (UPDATED for DIRECTION) ---
+        function startClientClock(startTimeString, lastServerTimestamp) {
+            if (clockInterval && clockStartTimestamp === lastServerTimestamp) return;
+            clearInterval(clockInterval);
+            clockStartTimeMs = parseTime(startTimeString || "15:00");
+            clockStartTimestamp = lastServerTimestamp;
+
+            clockInterval = setInterval(() => {
+                const now = Date.now();
+                const currentServerTime = now + globalTimeOffset;
+                const elapsed = currentServerTime - clockStartTimestamp; 
+                let newTimeMs;
+                
+                // Direction Logic
+                const direction = CP.globalState.clockDirection || 'down';
+                if (direction === 'up') {
+                    newTimeMs = clockStartTimeMs + elapsed;
+                } else {
+                    newTimeMs = Math.max(0, clockStartTimeMs - elapsed);
+                }
+
+                const newTimeString = formatTime(newTimeMs);
+                const cpClock = document.getElementById('cp-clock');
+                if (cpClock && cpClock.value !== newTimeString) { cpClock.value = newTimeString; }
+            }, 100);
+        }
+
+        function stopClientClock(timeString) {
+            clearInterval(clockInterval); clockInterval = null; 
+            const cpClock = document.getElementById('cp-clock');
+            if (cpClock) cpClock.value = timeString;
+        }
+
+        // --- FIRESTORE HELPERS ---
+        const getBroadcastDocRef = (gameId) => doc(db, `artifacts/${appId}/public/data/broadcasts/${gameId}`);
+        const getSettingsDocRef = (gameId) => doc(db, `artifacts/${appId}/public/data/broadcasts/${gameId}/settings/config`);
+        const getEventsCollectionRef = (gameId) => collection(db, `artifacts/${appId}/public/data/broadcasts/${gameId}/events`);
+        const getOperatorLogCollectionRef = (gameId) => collection(db, `artifacts/${appId}/public/data/broadcasts/${gameId}/operator_log`);
+        const getUsersCollectionRef = (gameId) => collection(db, `artifacts/${appId}/public/data/broadcasts/${gameId}/users`); 
+        const getLicensesCollectionRef = () => collection(db, `artifacts/${appId}/public/data/licenses`);
+        const getSystemConfigRef = () => doc(db, `artifacts/${appId}/public/data/system/tiers`);
+
+        function cleanupListeners(listeners) {
+            listeners.forEach(unsubscribe => unsubscribe());
+            listeners.length = 0; 
+            clearInterval(clockInterval); clockInterval = null;
+            if (CP.heartbeatInterval) { clearInterval(CP.heartbeatInterval); CP.heartbeatInterval = null; }
+        }
+        
+        // --- STAGING LOGIC FIX: Centralized Score Staging Function ---
+        function stageScoreUpdate(team, points, label) {
+            if (team === 'A') CP.localState.scoreA = Math.max(0, CP.localState.scoreA + points);
+            else CP.localState.scoreB = Math.max(0, CP.localState.scoreB + points);
+
+            const teamName = team === 'A' ? CP.localState.teamAName : CP.localState.teamBName;
+            const scoreDelta = Math.abs(points);
+
+            const logText = points > 0 
+                ? `${teamName} scored ${scoreDelta} (${label}). Staged.`
+                : `${teamName} score corrected by ${scoreDelta} point(s). Staged.`;
+                
+            updateControlPanelUI(); 
+            showToast(`Score update staged: ${logText}`);
+        }
+
+        // --- INITIALIZATION ---
+        async function initializeAppWrapper() {
+            try {
+                if (!firebaseConfig.apiKey) return;
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Silent'); 
+                
+                loadControlPanelSettings(); 
+                loadMacros(); 
+                initTierSync();
+                populateSportSelect();
+                
+                setupStaticListeners(); 
+
+                onAuthStateChanged(auth, async (user) => {
+                    loader.classList.add('hidden');
+                    if (user) {
+                        userId = user.uid;
+                        CP.isAnonymous = user.isAnonymous;
+                        await calculateServerTimeOffset(user); 
+                        await checkLicenseStatus(user);
+                        authView.classList.add('hidden');
+                        controlPanel.classList.remove('hidden');
+                        updateUserHeader(user);
+                    } else {
+                        userId = null;
+                        CP.isAnonymous = true;
+                        CP.license = null;
+                        CP.currentTier = TIER_CONFIG.free; 
+                        authView.classList.remove('hidden');
+                        controlPanel.classList.add('hidden');
+                        if (CP.gameId) disconnectFromChannel();
+                    }
+                });
+
+                const loginForm = document.getElementById('login-form');
+                const signupForm = document.getElementById('signup-form');
+                const authError = document.getElementById('auth-error-message');
+                const getFriendlyError = (error) => {
+                    if (error.code === 'auth/operation-not-allowed') return "Environment Not Confirmed. (Access Restricted)";
+                    if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') return "Invalid email or password.";
+                    return `Error: ${error.message}`;
+                };
+                loginForm.addEventListener('submit', async (e) => { e.preventDefault(); authError.innerText = ""; try { await signInWithEmailAndPassword(auth, loginForm.email.value, loginForm.password.value); } catch (error) { authError.innerText = getFriendlyError(error); }});
+                signupForm.addEventListener('submit', async (e) => { e.preventDefault(); authError.innerText = ""; if (signupForm.password.value !== signupForm.passwordConfirm.value) { authError.innerText = "Error: Passwords do not match."; return; } try { await createUserWithEmailAndPassword(auth, signupForm.email.value, signupForm.password.value); } catch (error) { authError.innerText = getFriendlyError(error); }});
+                document.getElementById('anon-login-btn').addEventListener('click', async () => { authError.innerText = ""; try { if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token); else await signInAnonymously(auth); } catch (error) { authError.innerText = getFriendlyError(error); }});
+
+            } catch (e) {
+                console.error("Error initializing Firebase: ", e);
+                showToast("Fatal Error: Could not initialize app.", true);
+            }
+        }
+        
+        function populateSportSelect() {
+            const select = document.getElementById('settings-sport-type');
+            select.innerHTML = '';
+            Object.entries(SPORT_CONFIG).forEach(([key, config]) => {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.innerText = config.label;
+                select.appendChild(opt);
+            });
+        }
+        
+        function initTierSync() {
+            const systemRef = getSystemConfigRef();
+            onSnapshot(systemRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const remoteData = docSnap.data();
+                    Object.keys(remoteData).forEach(key => { if (TIER_CONFIG[key]) TIER_CONFIG[key] = { ...TIER_CONFIG[key], ...remoteData[key] }; });
+                    if (auth.currentUser) checkLicenseStatus(auth.currentUser).then(() => updateUserHeader(auth.currentUser));
+                }
+            });
+        }
+        
+        function updateUserHeader(user) {
+            const userStatus = document.getElementById('user-status');
+            let html = `Logged in as: `;
+            if (user.isAnonymous) html += `<span class="font-bold text-yellow-400">Anonymous</span>`;
+            else html += `<span class="font-bold text-green-400">${user.email}</span>`;
+            
+            const tier = CP.currentTier;
+            if (tier.id !== 'free') {
+                let colorClass = 'bg-gray-600 text-white';
+                if (tier.color === 'cyan') colorClass = 'bg-cyan-900 text-cyan-200 border border-cyan-700';
+                if (tier.color === 'yellow') colorClass = 'bg-yellow-900 text-yellow-200 border border-yellow-700';
+                if (tier.color === 'purple') colorClass = 'bg-purple-900 text-purple-200 border border-purple-700';
+                html += ` <span class="ml-2 px-2 py-0.5 ${colorClass} text-xs font-black rounded uppercase tracking-widest">${tier.label}</span>`;
+            } else {
+                html += ` <button id="activate-license-btn" class="ml-2 text-xs text-blue-400 hover:text-blue-300 underline">Activate License</button>`;
+            }
+            userStatus.innerHTML = html;
+            const activateBtn = document.getElementById('activate-license-btn');
+            if(activateBtn) activateBtn.addEventListener('click', () => document.getElementById('license-modal').classList.remove('hidden'));
+        }
+        
+        async function checkLicenseStatus(user) {
+            if (user.isAnonymous) { CP.license = null; CP.currentTier = TIER_CONFIG.free; return; }
+            const licensesRef = getLicensesCollectionRef();
+            const q = query(licensesRef, where("ownerId", "==", user.uid));
+            try {
+                const querySnapshot = await getDocs(q);
+                if (!querySnapshot.empty) {
+                    const doc = querySnapshot.docs[0];
+                    const data = doc.data();
+                    CP.license = { id: doc.id, ...data };
+                    const tierKey = (data.tier || 'free').toLowerCase();
+                    CP.currentTier = TIER_CONFIG[tierKey] || TIER_CONFIG.free;
+                } else { CP.license = null; CP.currentTier = TIER_CONFIG.free; }
+            } catch (e) { CP.license = null; CP.currentTier = TIER_CONFIG.free; }
+        }
+        
+        async function redeemLicense(key) {
+            if (!userId || CP.isAnonymous) { showToast("You must be signed in to activate a license.", true); return; }
+            const collectionRef = getLicensesCollectionRef();
+            const licenseRef = doc(collectionRef, key);
+            try {
+                const docSnap = await getDoc(licenseRef);
+                if (!docSnap.exists()) { showToast("Invalid License Key.", true); return; }
+                const data = docSnap.data();
+                if (data.ownerId && data.ownerId !== userId) { showToast("This key is already in use by another account.", true); return; }
+                if (data.ownerId === userId) {
+                    showToast("Restoring license...", false);
+                    CP.license = { id: key, ...data };
+                    const tierKey = (data.tier || 'free').toLowerCase();
+                    CP.currentTier = TIER_CONFIG[tierKey] || TIER_CONFIG.free;
+                    updateUserHeader(auth.currentUser);
+                    document.getElementById('license-modal').classList.add('hidden');
+                    return;
+                }
+                await updateDoc(licenseRef, { ownerId: userId, activatedAt: serverTimestamp() });
+                CP.license = { id: key, tier: data.tier || 'free' };
+                const tierKey = (data.tier || 'free').toLowerCase();
+                CP.currentTier = TIER_CONFIG[tierKey] || TIER_CONFIG.free;
+                updateUserHeader(auth.currentUser);
+                showToast(`License Activated! ${CP.currentTier.label} features unlocked.`, false);
+                document.getElementById('license-modal').classList.add('hidden');
+                playAudioCue('deploy');
+            } catch (e) { showToast("Error activating license.", true); }
+        }
+
+        // --- DYNAMIC SPORT UI RENDERER ---
+        function renderSportUI() {
+            const sportType = CP.channelSettings.sportType || 'football';
+            const config = SPORT_CONFIG[sportType] || SPORT_CONFIG.football;
+
+            const containerA = document.getElementById('score-controls-a');
+            const containerB = document.getElementById('score-controls-b');
+            if (containerA) containerA.innerHTML = config.buttonHtml('A');
+            if (containerB) containerB.innerHTML = config.buttonHtml('B');
+
+            const periodSelect = document.getElementById('cp-quarter');
+            if (periodSelect) {
+                const currentVal = periodSelect.value;
+                periodSelect.innerHTML = "";
+                config.periods.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.val;
+                    opt.innerText = p.label;
+                    periodSelect.appendChild(opt);
+                });
+                if (config.periods.some(p => p.val === currentVal)) periodSelect.value = currentVal;
+                else {
+                    const defaultPeriod = config.periods[0].val;
+                    periodSelect.value = defaultPeriod;
+                    CP.localState.quarter = defaultPeriod; 
+                }
+            }
+        }
+
+        // --- PRESENCE & USERS ---
+        async function initPresence() {
+            const myPresenceRef = doc(CP.usersCollectionRef, userId);
+            const mySnap = await getDoc(myPresenceRef);
+            if (mySnap.exists() && mySnap.data().isBanned) {
+                alert("You are BANNED from this channel.");
+                disconnectFromChannel();
+                return;
+            }
+
+            const presenceData = {
+                displayName: CP.operatorName,
+                email: auth.currentUser.email || "Anonymous",
+                role: CP.isOwner ? 'owner' : 'operator',
+                status: 'online',
+                lastSeen: serverTimestamp(),
+                isBanned: false,
+                action: 'none'
+            };
+            await setDoc(myPresenceRef, presenceData, { merge: true });
+
+            CP.heartbeatInterval = setInterval(async () => {
+                try { await updateDoc(myPresenceRef, { lastSeen: serverTimestamp(), status: 'online' }); } catch(e) {}
+            }, 30000); 
+
+            const unsubMe = onSnapshot(myPresenceRef, (docSnap) => {
+                if(docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (data.isBanned) { alert("You have been BANNED by the owner."); disconnectFromChannel(); }
+                    else if (data.action === 'kick') { alert("You have been KICKED by the owner."); disconnectFromChannel(); }
+                }
+            });
+            CP.listeners.push(unsubMe);
+
+            const q = query(CP.usersCollectionRef); 
+            const unsubUsers = onSnapshot(q, (snapshot) => {
+                const users = [];
+                snapshot.forEach(doc => users.push({ id: doc.id, ...doc.data() }));
+                renderChannelUsers(users);
+            });
+            CP.listeners.push(unsubUsers);
+        }
+
+        function renderChannelUsers(users) {
+            const listContainer = document.getElementById('cp-users-list');
+            if(!listContainer) return;
+            listContainer.innerHTML = "";
+
+            const now = Date.now();
+            const TIMEOUT = 120000; 
+            
+            const activeUsers = [];
+            const offlineUsers = [];
+
+            users.forEach(u => {
+                let isOnline = false;
+                if (u.lastSeen && u.lastSeen.toMillis) {
+                    const diff = now - u.lastSeen.toMillis(); 
+                    if (diff < TIMEOUT) isOnline = true;
+                }
+                if (u.isBanned) isOnline = false;
+
+                if (isOnline) activeUsers.push(u); else offlineUsers.push(u);
+            });
+
+            const renderUserRow = (u, isOnline) => {
+                const li = document.createElement('li');
+                li.className = "flex justify-between items-center bg-gray-900/40 p-2 rounded mb-1 text-sm";
+                
+                let badge = isOnline ? `<span class="w-2 h-2 rounded-full bg-green-500 mr-2"></span>` : `<span class="w-2 h-2 rounded-full bg-gray-500 mr-2"></span>`;
+                if(u.role === 'owner') badge = `<span class="text-xs text-yellow-500 font-bold mr-2">👑</span>`;
+                if(u.isBanned) badge = `<span class="text-xs text-red-500 font-bold mr-2">🚫</span>`;
+
+                const name = u.displayName || u.email || "User";
+                
+                let actions = "";
+                if (CP.isOwner && u.id !== userId) {
+                    if (u.isBanned) {
+                        actions = `<span class="text-xs text-red-500 italic">Banned</span>`;
+                    } else {
+                        actions = `
+                            <div class="flex space-x-1">
+                                <button class="kick-btn text-xs bg-red-900/50 hover:bg-red-800 text-red-200 px-2 py-0.5 rounded" data-id="${u.id}">Kick</button>
+                                <button class="ban-btn text-xs bg-black hover:bg-red-900 text-red-500 border border-red-900 px-2 py-0.5 rounded" data-id="${u.id}">Ban</button>
+                            </div>
+                        `;
+                    }
+                }
+
+                li.innerHTML = `
+                    <div class="flex items-center text-gray-300 truncate">${badge}${name}</div>
+                    ${actions}
+                `;
+                
+                if(actions) {
+                    const kBtn = li.querySelector('.kick-btn');
+                    if(kBtn) kBtn.onclick = () => kickUser(u.id);
+                    const bBtn = li.querySelector('.ban-btn');
+                    if(bBtn) bBtn.onclick = () => banUser(u.id);
+                }
+
+                return li;
+            };
+
+            if (activeUsers.length > 0) {
+                listContainer.innerHTML += `<div class="text-xs text-green-400 font-bold uppercase mb-1 mt-1">Online (${activeUsers.length})</div>`;
+                activeUsers.forEach(u => listContainer.appendChild(renderUserRow(u, true)));
+            }
+            
+            if (offlineUsers.length > 0) {
+                listContainer.innerHTML += `<div class="text-xs text-gray-500 font-bold uppercase mb-1 mt-4">Offline / History</div>`;
+                offlineUsers.forEach(u => listContainer.appendChild(renderUserRow(u, false)));
+            }
+        }
+
+        async function kickUser(targetId) {
+            if(!confirm("Kick this user? They will be forced to reload.")) return;
+            try { await updateDoc(doc(CP.usersCollectionRef, targetId), { action: 'kick' }); showToast("User kicked.", false); } catch(e) { showToast("Error kicking user", true); }
+        }
+
+        async function banUser(targetId) {
+            if(!confirm("BAN this user? They will not be able to reconnect.")) return;
+            try { await updateDoc(doc(CP.usersCollectionRef, targetId), { isBanned: true }); showToast("User BANNED.", false); } catch(e) { showToast("Error banning user", true); }
+        }
+
+        // --- CONTROL PANEL (CP) LOGIC ---
+        
+        function setupStaticListeners() {
+            const connectButton = document.getElementById('cp-connect-btn');
+            const disconnectButton = document.getElementById('cp-disconnect-btn');
+            const signOutBtn = document.getElementById('sign-out-btn');
+
+            const updateNamesBtn = document.getElementById('cp-update-names');
+            const deployLiveBtn = document.getElementById('cp-deploy-live-btn');
+            const clockInput = document.getElementById('cp-clock');
+            const quarterInput = document.getElementById('cp-quarter');
+            const updateClockBtn = document.getElementById('cp-update-clock');
+            const startClockBtn = document.getElementById('cp-start-clock-btn');
+            const stopClockBtn = document.getElementById('cp-stop-clock-btn');
+            const clockDirBtn = document.getElementById('cp-clock-dir-btn'); 
+
+            const penaltyBtn = document.getElementById('cp-penalty-btn');
+            const turnoverBtn = document.getElementById('cp-turnover-btn');
+            const possTeamABtn = document.getElementById('cp-poss-a-btn');
+            const possTeamBBtn = document.getElementById('cp-poss-b-btn');
+            const possClearBtn = document.getElementById('cp-poss-clear-btn'); 
+            const penaltyTeam = document.getElementById('cp-penalty-team');
+            const penaltyDesc = document.getElementById('cp-penalty-desc');
+            const turnoverTeam = document.getElementById('cp-turnover-team');
+            const commentaryInput = document.getElementById('cp-commentary-text');
+            const commentaryPublicBtn = document.getElementById('cp-commentary-public-btn');
+            const commentaryOperatorBtn = document.getElementById('cp-commentary-operator-btn');
+            const graphicTitle = document.getElementById('cp-graphic-title');
+            const graphicSubtitle = document.getElementById('cp-graphic-subtitle');
+            const graphicShowBtn = document.getElementById('cp-graphic-show');
+            const graphicHideBtn = document.getElementById('cp-graphic-hide');
+            const graphicDurationInput = document.getElementById('cp-graphic-duration');
+            const resetScoreboardBtn = document.getElementById('cp-reset-scoreboard');
+            const resetScoreboardGlobalBtn = document.getElementById('cp-reset-scoreboard-global');
+            
+            const channelSettingsBtn = document.getElementById('cp-channel-settings-btn');
+            const channelSettingsModal = document.getElementById('channel-settings-modal');
+            const channelSettingsForm = document.getElementById('channel-settings-form');
+            const channelSettingsCloseBtn = document.getElementById('channel-settings-close-btn');
+            const channelNicknameInput = document.getElementById('settings-nickname');
+            const deleteChannelInput = document.getElementById('delete-channel-confirm-input');
+            const deleteChannelBtn = document.getElementById('delete-channel-btn');
+            const deleteChannelLabel = document.getElementById('delete-channel-id-label');
+            const deleteChannelError = document.getElementById('delete-channel-error');
+
+            const localSettingsBtn = document.getElementById('cp-local-settings-btn');
+            const localSettingsModal = document.getElementById('local-settings-modal');
+            const localSettingsForm = document.getElementById('local-settings-form');
+            const localSettingsCloseBtn = document.getElementById('local-settings-close-btn');
+            const localSettingsSaveBtn = document.getElementById('local-settings-save-btn');
+
+            const clearStagedBtn = document.getElementById('cp-clear-staged-btn');
+            const confirmModal = document.getElementById('confirm-modal');
+            const confirmModalConfirmBtn = document.getElementById('confirm-modal-confirm-btn');
+            const confirmModalCancelBtn = document.getElementById('confirm-modal-cancel-btn');
+            const clearLogBtn = document.getElementById('cp-clear-log-btn');
+            
+            const configureMacrosBtn = document.getElementById('cp-configure-macros-btn');
+            const macroModal = document.getElementById('macro-modal');
+            const macroCloseBtn = document.getElementById('macro-close-btn');
+            const macroForm = document.getElementById('macro-form');
+            const macroDeleteBtn = document.getElementById('macro-delete-btn');
+            const macroIdInput = document.getElementById('macro-id'); 
+            const macroAddActionSelect = document.getElementById('macro-add-action-select');
+            const macroAddActionBtn = document.getElementById('macro-add-action-btn');
+            const licenseForm = document.getElementById('license-form');
+            const licenseCloseBtn = document.getElementById('license-close-btn');
+            
+            // --- NEW: Reset Color Buttons ---
+            const resetColorABtn = document.getElementById('cp-reset-color-a');
+            const resetColorBBtn = document.getElementById('cp-reset-color-b');
+
+            // --- GLOBAL LISTENERS (Run Once) ---
+
+            signOutBtn.addEventListener('click', async () => await signOut(auth));
+
+            document.getElementById('control-panel').addEventListener('click', (e) => {
+                const btn = e.target.closest('.score-btn');
+                if (btn) {
+                    playAudioCue('click');
+                    const team = btn.dataset.scoreTeam;
+                    const points = parseInt(btn.dataset.scorePoints, 10);
+                    const label = btn.dataset.scoreLabel;
+                    stageScoreUpdate(team, points, label); 
+                }
+            });
+
+            connectButton.addEventListener('click', connectToChannel); 
+            disconnectButton.addEventListener('click', disconnectFromChannel);
+            
+            // NEW: Reset Color Logic
+            resetColorABtn.addEventListener('click', () => {
+                playAudioCue('click');
+                document.getElementById('cp-team-a-color-1').value = DEFAULT_COLORS.teamA.start;
+                document.getElementById('cp-team-a-color-2').value = DEFAULT_COLORS.teamA.end;
+                CP.localState.teamAColor1 = DEFAULT_COLORS.teamA.start;
+                CP.localState.teamAColor2 = DEFAULT_COLORS.teamA.end;
+                updateControlPanelUI();
+                showToast("Team A Colors Reset (Staged)", false);
+            });
+            
+            resetColorBBtn.addEventListener('click', () => {
+                playAudioCue('click');
+                document.getElementById('cp-team-b-color-1').value = DEFAULT_COLORS.teamB.start;
+                document.getElementById('cp-team-b-color-2').value = DEFAULT_COLORS.teamB.end;
+                CP.localState.teamBColor1 = DEFAULT_COLORS.teamB.start;
+                CP.localState.teamBColor2 = DEFAULT_COLORS.teamB.end;
+                updateControlPanelUI();
+                showToast("Team B Colors Reset (Staged)", false);
+            });
+
+            updateNamesBtn.addEventListener('click', () => {
+                const teamAInput = document.getElementById('cp-team-a-name');
+                const teamBInput = document.getElementById('cp-team-b-name');
+                const teamALogoInput = document.getElementById('cp-team-a-logo');
+                const teamBLogoInput = document.getElementById('cp-team-b-logo');
+                // New Color Inputs
+                const teamAColor1 = document.getElementById('cp-team-a-color-1');
+                const teamAColor2 = document.getElementById('cp-team-a-color-2');
+                const teamBColor1 = document.getElementById('cp-team-b-color-1');
+                const teamBColor2 = document.getElementById('cp-team-b-color-2');
+
+                if (!CP.currentTier.allowLogos && (teamALogoInput.value || teamBLogoInput.value)) { showToast("Team Logos are available in Basic, Pro & Enterprise tiers.", true); return; }
+
+                playAudioCue('click');
+                stageFieldChange('teamAName', teamAInput.value.trim() || "Home", 'Team A Name', { silent: true });
+                stageFieldChange('teamBName', teamBInput.value.trim() || "Away", 'Team B Name', { silent: true });
+                stageFieldChange('teamALogo', teamALogoInput.value.trim(), 'Team A Logo', { silent: true });
+                stageFieldChange('teamBLogo', teamBLogoInput.value.trim(), 'Team B Logo', { silent: true });
+
+                stageFieldChange('teamAColor1', teamAColor1.value, 'Team A Color 1', { silent: true });
+                stageFieldChange('teamAColor2', teamAColor2.value, 'Team A Color 2', { silent: true });
+                stageFieldChange('teamBColor1', teamBColor1.value, 'Team B Color 1', { silent: true });
+                stageFieldChange('teamBColor2', teamBColor2.value, 'Team B Color 2', { silent: true });
+
+                updateControlPanelUI();
+                showToast("Team info & colors staged.", false);
+            });
+
+            deployLiveBtn.addEventListener('click', deployLiveChanges); 
+
+            startClockBtn.addEventListener('click', () => { playAudioCue('global'); updateMainDoc({ clock: CP.localState.clock, clockState: "running", lastClockTimestamp: serverTimestamp(), clockDirection: CP.localState.clockDirection }); });
+            stopClockBtn.addEventListener('click', () => { playAudioCue('global'); const currentTimeOnScreen = document.getElementById('cp-clock').value; CP.localState.clock = currentTimeOnScreen; updateMainDoc({ clock: currentTimeOnScreen, clockState: "stopped" }); });
+            
+            clockDirBtn.addEventListener('click', () => {
+                playAudioCue('click');
+                const current = CP.localState.clockDirection || 'down';
+                CP.localState.clockDirection = (current === 'down') ? 'up' : 'down';
+                updateControlPanelUI();
+                showToast(`Clock set to Count ${CP.localState.clockDirection.toUpperCase()}`, false);
+            });
+
+            updateClockBtn.addEventListener('click', () => { playAudioCue('click'); const nextClock = clockInput.value.trim() || "00:00"; const nextQuarter = quarterInput.value; CP.localState.clockState = "stopped"; stageFieldChange('clock', nextClock, 'Clock', { silent: true, mode: 'set' }); stageFieldChange('quarter', nextQuarter, 'Quarter', { silent: true }); updateControlPanelUI(); showToast("Clock & Quarter have been staged.", false); });
+            penaltyBtn.addEventListener('click', () => { playAudioCue('click'); const team = penaltyTeam.value; const teamName = team === 'teamA' ? CP.localState.teamAName : CP.localState.teamBName; const desc = penaltyDesc.value.trim() || "Unspecified penalty"; CP.localState.stagedEvents.push({ type: 'penalty', text: `Penalty/Foul on ${teamName}. ${desc}`, data: { team }, collection: 'public' }); penaltyDesc.value = ""; showToast("Penalty staged.", false); updateStagedEventsUI(); });
+            turnoverBtn.addEventListener('click', () => { playAudioCue('click'); const team = turnoverTeam.value; const teamName = team === 'teamA' ? CP.localState.teamAName : CP.localState.teamBName; CP.localState.stagedEvents.push({ type: 'turnover', text: `Turnover! Possession to ${teamName}.`, data: { team }, collection: 'public' }); showToast("Turnover staged.", false); updateStagedEventsUI(); });
+            possTeamABtn.addEventListener('click', () => { playAudioCue('click'); stagePossessionAction('teamA'); });
+            possTeamBBtn.addEventListener('click', () => { playAudioCue('click'); stagePossessionAction('teamB'); });
+            possClearBtn.addEventListener('click', () => { playAudioCue('click'); stagePossessionAction('none'); });
+
+            commentaryPublicBtn.addEventListener('click', () => { if (!CP.currentTier.allowCommentary) { showToast("Public Commentary requires a Basic, Pro or Enterprise license.", true); return; } const text = commentaryInput.value.trim(); if (!text) return; playAudioCue('click'); CP.localState.stagedEvents.push({ type: 'commentary', text: text, data: { operator: CP.operatorName }, collection: 'public' }); commentaryInput.value = ""; showToast("Public commentary staged.", false); updateStagedEventsUI(); });
+            commentaryOperatorBtn.addEventListener('click', () => { const text = commentaryInput.value.trim(); if (!text) return; playAudioCue('click'); sendEvent("operator_comment", `[OPR] [${CP.operatorName}]: ${text}`, {}, CP.operatorLogCollectionRef); commentaryInput.value = ""; });
+            
+            graphicShowBtn.addEventListener('click', () => { const title = graphicTitle.value.trim(); const subtitle = graphicSubtitle.value.trim(); if (!title && !subtitle) { playAudioCue('error'); showToast("Graphic title or subtitle is required.", true); return; } if (!CP.currentTier.allowGraphics) { showToast("On-Screen Graphics are only available in Basic+ tiers.", true); return; } const dur = parseInt(graphicDurationInput.value, 10) || 0; if (dur > 0 && !CP.currentTier.allowAutoHide) { showToast("Auto-Hide duration requires a Pro license. Setting to 0.", true); graphicDurationInput.value = 0; CP.localState.graphicDuration = 0; } else { CP.localState.graphicDuration = dur; } playAudioCue('click'); stageGraphicAction({ operation: 'show', title, subtitle, duration: CP.localState.graphicDuration }); });
+            graphicHideBtn.addEventListener('click', () => { playAudioCue('click'); stageGraphicAction({ operation: 'hide' }); });
+
+            resetScoreboardBtn.addEventListener('click', () => { playAudioCue('click'); CP.localState.scoreA = 0; CP.localState.scoreB = 0; updateControlPanelUI(); showToast("Scoreboard reset locally.", false); });
+            resetScoreboardGlobalBtn.addEventListener('click', () => { if (CP.settings.confirmGlobalReset) { CP.confirmAction = 'globalReset'; document.getElementById('confirm-modal-text').innerText = "Are you sure you want to reset the GLOBAL scoreboard? This will set all scores to 0 and reset the clock."; confirmModal.classList.remove('hidden'); } else { executeGlobalReset(); } });
+
+            channelSettingsBtn.addEventListener('click', () => {
+                document.getElementById('channel-settings-form').password.value = CP.channelSettings.password || "";
+                document.getElementById('channel-settings-form').requireLogin.checked = CP.channelSettings.requireLogin;
+                document.getElementById('settings-sport-type').value = CP.channelSettings.sportType || 'football';
+                // Set Visual Mode from saved settings
+                document.getElementById('settings-visual-mode').value = CP.channelSettings.visualMode || 'rounded';
+                channelNicknameInput.value = CP.channelSettings.nickname || "";
+                deleteChannelLabel.textContent = CP.gameId || '';
+                deleteChannelInput.value = "";
+                deleteChannelBtn.disabled = true;
+                deleteChannelError.classList.add('hidden');
+                channelSettingsModal.classList.remove('hidden');
+            });
+            channelSettingsCloseBtn.addEventListener('click', () => { channelSettingsModal.classList.add('hidden'); });
+
+            // Updated Settings Save Handler
+            channelSettingsForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                CP.channelSettings.password = document.getElementById('channel-settings-form').password.value.trim() || null;
+                CP.channelSettings.requireLogin = document.getElementById('channel-settings-form').requireLogin.checked;
+                CP.channelSettings.sportType = document.getElementById('settings-sport-type').value;
+                CP.channelSettings.nickname = channelNicknameInput.value.trim();
+
+                // Save Visual Mode
+                const newVisualMode = document.getElementById('settings-visual-mode').value;
+                CP.channelSettings.visualMode = newVisualMode;
+                CP.localState.visualMode = newVisualMode; // Apply locally immediately
+                
+                // Save to Settings Doc
+                await setDoc(CP.settingsDocRef, CP.channelSettings, { merge: true });
+
+                // Also update Main Doc with visual mode so Display updates instantly
+                updateMainDoc({ visualMode: newVisualMode });
+
+                renderSportUI();
+                updateControlPanelUI();
+                updateConnectionStatusUI();
+                updateDocumentTitleWithChannel();
+                showToast("Channel settings updated.", false);
+                channelSettingsModal.classList.add('hidden');
+            });
+
+            const validateDeleteChannelInput = () => {
+                if (!deleteChannelInput || !deleteChannelBtn) return false;
+                const expected = CP.gameId || '';
+                const entered = deleteChannelInput.value;
+                const matches = !!entered && entered === expected && entered.trim() === entered;
+                if (entered && !matches) {
+                    deleteChannelError.textContent = "Broadcast ID does not match.";
+                    deleteChannelError.classList.remove('hidden');
+                } else {
+                    deleteChannelError.classList.add('hidden');
+                }
+                deleteChannelBtn.disabled = !matches;
+                return matches;
+            };
+
+            deleteChannelInput.addEventListener('input', validateDeleteChannelInput);
+
+            deleteChannelBtn.addEventListener('click', async () => {
+                if (!validateDeleteChannelInput()) return;
+                try {
+                    if (CP.gameDocRef) await deleteDoc(CP.gameDocRef);
+                    if (CP.settingsDocRef) await deleteDoc(CP.settingsDocRef);
+                    channelSettingsModal.classList.add('hidden');
+                    deleteChannelInput.value = "";
+                    deleteChannelBtn.disabled = true;
+                    deleteChannelError.classList.add('hidden');
+                    disconnectFromChannel();
+                    showToast("Channel deleted.", false);
+                } catch (err) {
+                    console.error('Error deleting channel', err);
+                    deleteChannelError.textContent = "Error deleting channel.";
+                    deleteChannelError.classList.remove('hidden');
+                }
+            });
+
+            localSettingsBtn.addEventListener('click', () => { localSettingsForm.theme.value = CP.settings.theme; localSettingsForm.layout.value = CP.settings.layout; localSettingsForm.logFontSize.value = CP.settings.logFontSize; localSettingsForm.compactLog.checked = CP.settings.compactLog; localSettingsForm.audioCues.checked = CP.settings.audioCues; localSettingsForm.confirmGlobalReset.checked = CP.settings.confirmGlobalReset; localSettingsModal.classList.remove('hidden'); });
+            localSettingsCloseBtn.addEventListener('click', () => { localSettingsModal.classList.add('hidden'); document.getElementById('local-settings-toast').classList.add('opacity-0'); });
+            localSettingsSaveBtn.addEventListener('click', (e) => { e.preventDefault(); saveControlPanelSettings(); document.getElementById('local-settings-toast').classList.remove('opacity-0'); setTimeout(() => document.getElementById('local-settings-toast').classList.add('opacity-0'), 2000); });
+
+            confirmModalCancelBtn.addEventListener('click', () => { confirmModal.classList.add('hidden'); CP.confirmAction = null; CP.confirmData = null; });
+            confirmModalConfirmBtn.addEventListener('click', async () => { if (CP.confirmAction === 'deleteEvent') await deleteSingleLogEvent(); else if (CP.confirmAction === 'clearLogs') await clearAllLogs(); else if (CP.confirmAction === 'globalReset') await executeGlobalReset(); confirmModal.classList.add('hidden'); CP.confirmAction = null; CP.confirmData = null; });
+            clearLogBtn.addEventListener('click', () => { CP.confirmAction = 'clearLogs'; document.getElementById('confirm-modal-text').innerText = "Are you sure you want to permanently delete ALL log events? This cannot be undone."; confirmModal.classList.remove('hidden'); });
+            clearStagedBtn.addEventListener('click', () => { playAudioCue('click'); CP.localState.stagedEvents = []; CP.localState.stagedFields = []; const keys = ['scoreA', 'scoreB', 'teamAName', 'teamBName', 'teamALogo', 'teamBLogo', 'teamAColor1', 'teamAColor2', 'teamBColor1', 'teamBColor2', 'activeGraphic', 'clock', 'quarter', 'possession', 'clockDirection', 'visualMode']; keys.forEach(k => CP.localState[k] = CP.globalState[k]); updateControlPanelUI(); renderStagedFieldsUI(); updateStagedEventsUI(); showToast("Staging area cleared.", false); });
+            
+            configureMacrosBtn.addEventListener('click', () => openMacroModal());
+            macroCloseBtn.addEventListener('click', () => { macroModal.classList.add('hidden'); });
+            macroForm.addEventListener('submit', (e) => { e.preventDefault(); saveMacroFromForm(); });
+            macroDeleteBtn.addEventListener('click', () => { const id = macroIdInput.value; if(id) deleteMacro(id); });
+            macroAddActionBtn.addEventListener('click', () => { const type = macroAddActionSelect.value; addMacroAction(type); });
+            licenseCloseBtn.addEventListener('click', () => { document.getElementById('license-modal').classList.add('hidden'); });
+            licenseForm.addEventListener('submit', (e) => { e.preventDefault(); const key = document.getElementById('license-key-input').value.trim(); if(key) redeemLicense(key); });
+        }
+        
+        // --- CONNECTION LOGIC (Runs on user click) ---
+        async function connectToChannel() {
+            const gameIdInput = document.getElementById('cp-game-id');
+            const operatorNameInput = document.getElementById('cp-operator-name');
+            const controlArea = document.getElementById('cp-controls');
+            const masterControlArea = document.getElementById('cp-master-controls');
+            const combinedLogArea = document.getElementById('cp-combined-log-section');
+            const usersArea = document.getElementById('cp-users-section');
+            const connectionStatus = document.getElementById('cp-connection-status');
+            const ownerStatus = document.getElementById('owner-status');
+            const deployLiveBtn = document.getElementById('cp-deploy-live-btn');
+            const stagingArea = document.getElementById('cp-staging-area');
+            const macrosSection = document.getElementById('cp-macros-section');
+            const channelSettingsBtn = document.getElementById('cp-channel-settings-btn');
+
+
+            const gameId = gameIdInput.value.trim();
+            const operatorName = operatorNameInput.value.trim();
+
+            if (!gameId) { showToast("Please enter a Broadcast ID.", true); return; }
+            if (!operatorName) { showToast("Please enter your name.", true); return; }
+            
+            CP.gameId = gameId;
+            CP.operatorName = operatorName; 
+            CP.gameDocRef = getBroadcastDocRef(gameId);
+            CP.settingsDocRef = getSettingsDocRef(gameId);
+            CP.eventsCollectionRef = getEventsCollectionRef(gameId);
+            CP.operatorLogCollectionRef = getOperatorLogCollectionRef(gameId);
+            CP.usersCollectionRef = getUsersCollectionRef(gameId);
+
+            try {
+                const settingsSnap = await getDoc(CP.settingsDocRef);
+                if (CP.isAnonymous) {
+                    if (!settingsSnap.exists()) { showToast("You must be signed in to create a new channel.", true); return; }
+                    CP.channelSettings = settingsSnap.data();
+                    if (CP.channelSettings.requireLogin) { showToast("This channel requires a login.", true); return; }
+                    if (CP.channelSettings.password) {
+                        const pass = prompt(`This channel is password protected. Enter password:`);
+                        if (pass !== CP.channelSettings.password) { showToast("Incorrect password.", true); return; }
+                    }
+                } else {
+                    if (settingsSnap.exists()) {
+                        CP.channelSettings = settingsSnap.data();
+                        if (CP.channelSettings.password) {
+                            const pass = prompt(`This channel is password protected. Enter password:`);
+                            if (pass !== CP.channelSettings.password) { showToast("Incorrect password.", true); return; }
+                        }
+                    } else {
+                        if (!CP.currentTier.canCreate) { showToast(`Upgrade to Basic or Pro to create channels.`, true); document.getElementById('license-modal').classList.remove('hidden'); return; }
+                        // Default new channel settings
+                        CP.channelSettings = { requireLogin: false, password: null, ownerId: auth.currentUser.uid, ownerEmail: auth.currentUser.email, sportType: 'football', visualMode: 'rounded', nickname: '' };
+                        await setDoc(CP.settingsDocRef, CP.channelSettings);
+                        showToast("You are the owner of this new channel.", false);
+                    }
+                }
+                
+                CP.isOwner = auth.currentUser.uid === CP.channelSettings.ownerId;
+                ownerStatus.classList.add('hidden');
+
+                updateDocumentTitleWithChannel();
+                updateConnectionStatusUI();
+
+                renderSportUI();
+
+                const docSnap = await getDoc(CP.gameDocRef);
+                if (docSnap.exists()) { CP.globalState = docSnap.data(); CP.localState = { ...CP.globalState, stagedEvents: [], stagedFields: [], graphicDuration: 0 }; }
+                else { await setDoc(CP.gameDocRef, CP.localState); CP.globalState = { ...CP.localState }; }
+                
+                const unsubMainDoc = onSnapshot(CP.gameDocRef, (doc) => {
+                    if (doc.exists()) {
+                        const data = doc.data();
+                        CP.globalState = { ...data }; 
+                        
+                        const staged = {
+                            scoreA: CP.localState.scoreA,
+                            scoreB: CP.localState.scoreB,
+                            teamAName: CP.localState.teamAName,
+                            teamBName: CP.localState.teamBName,
+                            teamALogo: CP.localState.teamALogo,
+                            teamBLogo: CP.localState.teamBLogo,
+                            teamAColor1: CP.localState.teamAColor1,
+                            teamAColor2: CP.localState.teamAColor2,
+                            teamBColor1: CP.localState.teamBColor1,
+                            teamBColor2: CP.localState.teamBColor2,
+                            activeGraphic: CP.localState.activeGraphic,
+                            graphicDuration: CP.localState.graphicDuration,
+                            visualMode: CP.localState.visualMode // Ensure visual mode is tracked
+                        };
+                        
+                        CP.localState = { ...data, ...staged, stagedEvents: CP.localState.stagedEvents, stagedFields: CP.localState.stagedFields || [] };
+                        updateControlPanelUI();
+                        
+                        if (data.clockState === "running" && data.lastClockTimestamp) {
+                            let startTs = data.lastClockTimestamp;
+                            if (typeof startTs === 'object' && startTs.toMillis) startTs = startTs.toMillis();
+                            startClientClock(data.clock, startTs);
+                        } else {
+                            stopClientClock(data.clock || "00:00");
+                        }
+                    } else {
+                        showToast("Broadcast document was deleted.", true);
+                        disconnectButton.click(); 
+                    }
+                });
+                CP.listeners.push(unsubMainDoc);
+
+                updateConnectionStatusUI();
+                updateDocumentTitleWithChannel();
+                updateControlPanelUI();
+                
+                document.getElementById('connection-box').classList.add('hidden');
+                document.getElementById('connected-box').classList.remove('hidden');
+                controlArea.classList.remove('opacity-20', 'pointer-events-none');
+                masterControlArea.classList.remove('hidden');
+                combinedLogArea.classList.remove('hidden'); 
+                usersArea.classList.remove('hidden'); 
+                deployLiveBtn.classList.remove('hidden');
+                stagingArea.classList.remove('hidden');
+                macrosSection.classList.remove('hidden');
+
+                channelSettingsBtn.classList.toggle('hidden', !CP.isOwner);
+                applySecurityPermissions(CP.isAnonymous);
+                initControlPanelCombinedLog(); 
+                initPresence(); 
+                subscribeToChannelMacrosHybrid(CP.gameId);
+
+                
+            } catch (e) { console.error("Error connecting to game: ", e); showToast("Error connecting to game.", true); }
+        }
+
+        // --- DEPLOYMENT LOGIC (Runs on user click) ---
+        async function deployLiveChanges() {
+            playAudioCue('deploy');
+            if (CP.activeGraphicTimer) { clearTimeout(CP.activeGraphicTimer); CP.activeGraphicTimer = null; }
+            if (CP.localState.quarter !== CP.globalState.quarter) await sendEvent("clock", `${CP.localState.quarter} Initialized`, {}, CP.eventsCollectionRef, true);
+            
+            let targetClockState = CP.globalState.clockState;
+            if (CP.localState.clockState !== CP.globalState.clockState) targetClockState = CP.localState.clockState;
+            else if (CP.localState.clock !== CP.globalState.clock) targetClockState = 'stopped';
+
+            const nextTimestamp = (targetClockState === 'running' && CP.globalState.clockState !== 'running') ? serverTimestamp() : CP.globalState.lastClockTimestamp;
+
+            const mainDocData = {
+                teamAName: CP.localState.teamAName,
+                teamBName: CP.localState.teamBName,
+                teamALogo: CP.localState.teamALogo,
+                teamBLogo: CP.localState.teamBLogo,
+                teamAColor1: CP.localState.teamAColor1,
+                teamAColor2: CP.localState.teamAColor2,
+                teamBColor1: CP.localState.teamBColor1,
+                teamBColor2: CP.localState.teamBColor2,
+                scoreA: CP.localState.scoreA,
+                scoreB: CP.localState.scoreB,
+                activeGraphic: CP.localState.activeGraphic,
+                clock: CP.localState.clock,
+                quarter: CP.localState.quarter,
+                possession: CP.localState.possession,
+                clockState: targetClockState,
+                lastClockTimestamp: nextTimestamp,
+                clockDirection: CP.localState.clockDirection,
+                visualMode: CP.localState.visualMode 
+            };
+            
+            await updateMainDoc(mainDocData); 
+            
+            for (const event of CP.localState.stagedEvents) {
+                const targetCollection = (event.collection === 'public') ? CP.eventsCollectionRef : CP.operatorLogCollectionRef;
+                const eventData = {
+                    type: event.type,
+                    text: event.text,
+                    data: event.data,
+                    operatorName: CP.operatorName, 
+                    timestamp: serverTimestamp()
+                };
+                await addDoc(targetCollection, eventData);
+            }
+            
+            let logText = `Deployed Live by ${CP.operatorName}.`;
+            if (CP.localState.scoreA !== CP.globalState.scoreA || CP.localState.scoreB !== CP.globalState.scoreB) {
+                logText = `Score Updated: ${CP.localState.teamAName} ${CP.localState.scoreA} - ${CP.localState.teamBName} ${CP.localState.scoreB} (by ${CP.operatorName})`;
+            }
+            sendEvent("deploy", logText, {}, CP.operatorLogCollectionRef);
+            
+            if (CP.localState.activeGraphic && CP.localState.graphicDuration > 0) {
+                 const duration = CP.localState.graphicDuration;
+                 CP.activeGraphicTimer = setTimeout(async () => {
+                     await updateMainDoc({ activeGraphic: null });
+                     sendEvent("graphic", `Graphic Auto-Hidden after ${duration/1000}s`, {}, CP.operatorLogCollectionRef);
+                     showToast(`Graphic Auto-Hidden after ${duration/1000}s`, false);
+                     CP.localState.activeGraphic = null;
+                     updateControlPanelUI();
+                 }, duration);
+            }
+
+            CP.localState.stagedEvents = [];
+            
+            const keysToResync = ['scoreA', 'scoreB', 'teamAName', 'teamBName', 'teamALogo', 'teamBLogo', 'teamAColor1', 'teamAColor2', 'teamBColor1', 'teamBColor2', 'activeGraphic', 'clock', 'quarter', 'possession', 'clockDirection', 'visualMode'];
+            keysToResync.forEach(k => CP.localState[k] = CP.globalState[k]);
+
+            updateStagedEventsUI();
+            showToast("All staged changes have been deployed.", false);
+        }
+
+        // --- HELPERS (MACRO, LOGGING) ---
+// Hybrid macro engine: shared (channel) + personal (per-user) macros
+// Shared macros: visible to all operators on this channel
+// Personal macros: only visible & editable by the operator that created them
+
+function getLocalMacrosKey(scope) {
+    const base = CP_MACROS_KEY || 'broadcastMacros_v2';
+    const gid = CP.gameId || 'noChannel';
+    const uidSafe = (typeof userId === 'string' && userId) ? userId : 'anon';
+    return `${base}_${scope}_${gid}_${uidSafe}`;
+}
+
+// Locally-saved macros: stored only in this browser, not tied to channel or user.
+function getLocalOnlyMacrosKey() {
+    const base = CP_MACROS_KEY || 'broadcastMacros_v2';
+    return `${base}_local_only`;
+}
+
+function loadMacrosFromLocal() {
+    // Local cache, used before Firestore subscription is ready
+    const sharedRaw = localStorage.getItem(getLocalMacrosKey('shared'));
+    const personalRaw = localStorage.getItem(getLocalMacrosKey('personal'));
+    const localRaw = localStorage.getItem(getLocalOnlyMacrosKey());
+
+    let shared = [];
+    let personal = [];
+    let local = [];
+
+    try { shared = sharedRaw ? JSON.parse(sharedRaw) : []; } catch (e) { shared = []; }
+    try { personal = personalRaw ? JSON.parse(personalRaw) : []; } catch (e) { personal = []; }
+    try { local = localRaw ? JSON.parse(localRaw) : []; } catch (e) { local = []; }
+
+    // Attach scope flags
+    shared = shared.map(m => ({ ...m, scope: 'shared' }));
+    personal = personal.map(m => ({ ...m, scope: 'personal' }));
+    local = local.map(m => ({ ...m, scope: 'local' }));
+
+    // Show locally-saved macros alongside channel-scoped ones
+    CP.macros = [...local, ...shared, ...personal];
+    renderMacros();
+}
+
+function loadMacros() { loadMacrosFromLocal(); }
+
+function persistMacrosLocal() {
+    const all = CP.macros || [];
+    const shared = all.filter(m => m.scope === 'shared').map(m => {
+        const { scope, ...rest } = m; return rest;
+    });
+    const personal = all.filter(m => m.scope === 'personal').map(m => {
+        const { scope, ...rest } = m; return rest;
+    });
+    const local = all.filter(m => m.scope === 'local').map(m => {
+        const { scope, ...rest } = m; return rest;
+    });
+
+    try {
+        localStorage.setItem(getLocalMacrosKey('shared'), JSON.stringify(shared));
+        localStorage.setItem(getLocalMacrosKey('personal'), JSON.stringify(personal));
+        localStorage.setItem(getLocalOnlyMacrosKey(), JSON.stringify(local));
+    } catch (e) {
+        console.warn("Failed to persist macros to localStorage", e);
+    }
+}
+
+function clearMacroSubscriptions() {
+    if (CP.macrosSharedUnsub) {
+        CP.macrosSharedUnsub();
+        CP.macrosSharedUnsub = null;
+    }
+    if (CP.macrosPersonalUnsub) {
+        CP.macrosPersonalUnsub();
+        CP.macrosPersonalUnsub = null;
+    }
+}
+
+function subscribeToChannelMacrosHybrid(gameId) {
+    if (!db || !gameId) return;
+    clearMacroSubscriptions();
+
+    const basePath = `artifacts/${appId}/public/data/broadcasts/${gameId}`;
+    const sharedRef = collection(db, `${basePath}/macros`);
+    const personalRef = (userId ? collection(db, `${basePath}/users/${userId}/macros`) : null);
+
+    CP.macrosSharedRef = sharedRef;
+    CP.macrosPersonalRef = personalRef;
+
+    CP.macrosSharedUnsub = onSnapshot(
+        query(sharedRef, orderBy('label')),
+        (snap) => {
+            const items = [];
+            snap.forEach(docSnap => {
+                const data = docSnap.data() || {};
+                items.push({
+                    id: docSnap.id,
+                    label: data.label || 'Shared Macro',
+                    actions: Array.isArray(data.actions) ? data.actions : [],
+                    scope: 'shared',
+                    protected: !!data.protected,
+                    ownerId: data.ownerId || null,
+                    createdAt: data.createdAt || null,
+                    updatedAt: data.updatedAt || null,
+                });
+            });
+            const existing = CP.macros || [];
+            const locals = existing.filter(m => m.scope === 'local');
+            const personals = existing.filter(m => m.scope === 'personal');
+            CP.macros = [
+                ...locals,
+                ...items,
+                ...personals
+            ];
+            persistMacrosLocal();
+            renderMacros();
+        },
+        (err) => {
+            console.error("Error subscribing to shared macros", err);
+            if (err && err.code === 'permission-denied') {
+                CP.macrosFirestoreDisabled = true;
+                clearMacroSubscriptions();
+                loadMacrosFromLocal();
+            } else {
+                showToast("Error loading shared macros.", true);
+            }
+        }
+    );
+
+    if (personalRef) {
+        CP.macrosPersonalUnsub = onSnapshot(
+            query(personalRef, orderBy('label')),
+            (snap) => {
+                const items = [];
+                snap.forEach(docSnap => {
+                    const data = docSnap.data() || {};
+                    items.push({
+                        id: docSnap.id,
+                        label: data.label || 'My Macro',
+                        actions: Array.isArray(data.actions) ? data.actions : [],
+                        scope: 'personal',
+                        protected: !!data.protected,
+                        ownerId: data.ownerId || null,
+                        createdAt: data.createdAt || null,
+                        updatedAt: data.updatedAt || null,
+                    });
+                });
+                const existing = CP.macros || [];
+                const locals = existing.filter(m => m.scope === 'local');
+                const shared = existing.filter(m => m.scope === 'shared');
+                CP.macros = [
+                    ...locals,
+                    ...shared,
+                    ...items
+                ];
+                persistMacrosLocal();
+                renderMacros();
+            },
+            (err) => {
+                console.error("Error subscribing to personal macros", err);
+                if (err && err.code === 'permission-denied') {
+                    CP.macrosFirestoreDisabled = true;
+                    clearMacroSubscriptions();
+                    loadMacrosFromLocal();
+                } else {
+                    showToast("Error loading personal macros.", true);
+                }
+            }
+        );
+    } else {
+        // No user id (anonymous) – keep any local personal macros only
+        CP.macros = (CP.macros || []).filter(m => m.scope === 'shared' || m.scope === 'local');
+        persistMacrosLocal();
+        renderMacros();
+    }
+}
+
+function renderMacros() {
+    const grid = document.getElementById('cp-macros-grid');
+    if (!grid) return;
+    grid.innerHTML = "";
+
+    if (!CP.macros || CP.macros.length === 0) {
+        grid.innerHTML = `<div class="text-gray-500 text-sm italic col-span-2 text-center p-4">
+            No macros configured. Click "Configure" to add one or Import JSON.
+        </div>`;
+        return;
+    }
+
+    CP.macros.forEach((macro) => {
+        const btn = document.createElement('button');
+
+        let baseClasses = "font-medium py-3 px-2 rounded-sm text-left text-sm border flex flex-col items-start justify-center h-full relative group transition-all duration-200 ";
+        if (macro.scope === 'shared') {
+            // Channel Shared: purple
+            baseClasses += "bg-purple-900/40 border-purple-700 text-purple-100 hover:bg-purple-800/70";
+        } else if (macro.scope === 'personal') {
+            // Channel Personal: cyan
+            baseClasses += "bg-cyan-900/40 border-cyan-600 text-cyan-100 hover:bg-cyan-800/70";
+        } else if (macro.scope === 'local') {
+            // Locally Saved: lime
+            baseClasses += "bg-lime-900/40 border-lime-600 text-lime-100 hover:bg-lime-800/70";
+        } else {
+            // Fallback
+            baseClasses += "bg-gray-900/40 border-gray-600 text-gray-100 hover:bg-gray-800/70";
+        }
+
+        if (macro.protected) {
+            baseClasses += " ring-1 ring-yellow-400";
+        }
+
+        btn.className = baseClasses;
+
+        const stepsCount = Array.isArray(macro.actions) ? macro.actions.length : 0;
+        let scopeLabel = "Macro";
+        if (macro.scope === 'shared') scopeLabel = "Channel Shared";
+        else if (macro.scope === 'personal') scopeLabel = "Channel Personal";
+        else if (macro.scope === 'local') scopeLabel = "Locally Saved";
+
+        const protectedBadge = macro.protected
+            ? `<span class="ml-2 text-[10px] font-bold text-yellow-300 px-1 border border-yellow-400 rounded">LOCK</span>`
+            : "";
+
+        const safeLabel = escapeHtml(macro.label || "");
+
+        btn.innerHTML = `
+            <span class="flex items-center">
+                <span>${safeLabel}</span>
+                ${protectedBadge}
+            </span>
+            <span class="text-[10px] text-purple-300 mt-1">${stepsCount} step${stepsCount === 1 ? '' : 's'} • ${scopeLabel}</span>
+        `;
+
+        btn.addEventListener('click', (e) => {
+            if (e.target.closest('.edit-macro')) return;
+            applyMacro(macro);
+        });
+
+        const editBtn = document.createElement('button');
+        editBtn.className = "edit-macro absolute top-1 right-1 text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity p-1 bg-gray-900/70 rounded";
+        editBtn.innerHTML = "⚙️";
+        editBtn.title = "Edit Macro";
+        editBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openMacroModal(macro);
+        });
+
+        btn.appendChild(editBtn);
+        grid.appendChild(btn);
+    });
+}
+
+function addStagedEvent(type, text, data = {}, collection = 'public') {
+    if (!CP.localState.stagedEvents) CP.localState.stagedEvents = [];
+    CP.localState.stagedEvents.push({ type, text, data, collection });
+}
+
+function applyMacro(macro) {
+    playAudioCue('click');
+    if (!macro.actions || !Array.isArray(macro.actions)) return;
+    const clockInput = document.getElementById('cp-clock');
+    const quarterInput = document.getElementById('cp-quarter');
+    const startClockBtn = document.getElementById('cp-start-clock-btn');
+    const stopClockBtn = document.getElementById('cp-stop-clock-btn');
+    const graphicTitleInput = document.getElementById('cp-graphic-title');
+    const graphicSubtitleInput = document.getElementById('cp-graphic-subtitle');
+    const graphicDurationInput = document.getElementById('cp-graphic-duration');
+    macro.actions.forEach((action) => {
+        switch (action.type) {
+            case 'clock':
+                if (action.operation === 'start') {
+                    startClockBtn?.click();
+                } else if (action.operation === 'stop') {
+                    stopClockBtn?.click();
+                } else if (action.operation === 'set' && action.time) {
+                    if (clockInput) clockInput.value = action.time;
+                    stageFieldChange('clock', action.time, 'Clock', { mode: 'set' });
+                    CP.localState.clockState = 'stopped';
+                    addStagedEvent('clock', `Clock set to ${action.time}`, { value: action.time, stagedField: true }, 'public');
+                }
+                break;
+
+            case 'quarter':
+                if (action.value) {
+                    if (quarterInput) quarterInput.value = action.value;
+                    stageFieldChange('quarter', action.value, 'Quarter');
+                    addStagedEvent('quarter', `Quarter set to ${action.value}`, { value: action.value, stagedField: true }, 'public');
+                }
+                break;
+
+            case 'score': {
+                if (!action.team || !action.operation) break;
+                const teamKey = action.team === 'B' ? 'B' : 'A';
+                const teamName = teamKey === 'A' ? CP.localState.teamAName : CP.localState.teamBName;
+                if (action.operation === 'set') {
+                    const targetVal = Math.max(0, Number(action.amount || 0));
+                    const scoreKey = teamKey === 'A' ? 'scoreA' : 'scoreB';
+                    stageFieldChange(scoreKey, targetVal, `${teamName} Score`, { mode: 'set' });
+                    addStagedEvent('score', `${teamName} score set to ${targetVal}`, { team: teamKey, value: targetVal, stagedField: true }, 'public');
+                } else {
+                    const deltaRaw = Number(action.amount || 0);
+                    const delta = action.operation === 'subtract' ? -Math.abs(deltaRaw) : Math.abs(deltaRaw);
+                    stageScoreUpdate(teamKey, delta, action.label || 'Score');
+                    addStagedEvent('score', `${teamName}: ${delta > 0 ? '+' + delta : delta}`, { team: teamKey, delta, stagedField: true }, 'public');
+                }
+                break;
+            }
+
+            case 'graphic':
+                if (action.operation === 'show') {
+                    const title = action.title || '';
+                    const subtitle = action.subtitle || '';
+                    const duration = (typeof action.duration === 'number') ? action.duration : (parseInt(action.duration, 10) || 0);
+                    if (graphicTitleInput) graphicTitleInput.value = title;
+                    if (graphicSubtitleInput) graphicSubtitleInput.value = subtitle;
+                    if (graphicDurationInput) graphicDurationInput.value = duration;
+                    stageGraphicAction({ operation: 'show', title, subtitle, duration });
+                } else if (action.operation === 'hide') {
+                    if (graphicTitleInput) graphicTitleInput.value = '';
+                    if (graphicSubtitleInput) graphicSubtitleInput.value = '';
+                    if (graphicDurationInput) graphicDurationInput.value = '';
+                    stageGraphicAction({ operation: 'hide' });
+                }
+                break;
+
+            case 'possession':
+                if (action.value === 'teamA' || action.value === 'teamB' || action.value === 'none') stagePossessionAction(action.value);
+                break;
+
+            case 'log':
+                if (action.text) {
+                    if (action.logType === 'operator') {
+                        sendEvent(action.logType || 'commentary', action.text, { operator: CP.operatorName }, CP.operatorLogCollectionRef, true);
+                    } else {
+                        addStagedEvent(action.logType || 'commentary', action.text, { operator: CP.operatorName }, 'public');
+                    }
+                }
+                break;
+
+            default:
+                console.warn("Unknown macro action type", action);
+        }
+    });
+    updateControlPanelUI();
+    renderStagedFieldsUI();
+    updateStagedEventsUI();
+    showToast(`Macro '${macro.label}' executed. Staged changes added.`, false);
+}
+
+function openMacroModal(macro = null) {
+    const modal = document.getElementById('macro-modal');
+    const form = document.getElementById('macro-form');
+    const deleteBtn = document.getElementById('macro-delete-btn');
+    const scopeSelect = document.getElementById('macro-scope');
+    if (!modal || !form || !scopeSelect) return;
+
+    if (macro) {
+        document.getElementById('macro-modal-title').textContent = "Edit Macro";
+        form.label.value = macro.label || "";
+        document.getElementById('macro-id').value = macro.id || "";
+        scopeSelect.value = macro.scope || 'shared';
+        CP.editingMacroActions = (macro.actions || []).map(a => JSON.parse(JSON.stringify(a)));
+        deleteBtn.classList.remove('hidden');
+    } else {
+        document.getElementById('macro-modal-title').textContent = "Create Macro";
+        form.label.value = "";
+        document.getElementById('macro-id').value = "";
+        scopeSelect.value = CP.isOwner ? 'shared' : 'personal';
+        CP.editingMacroActions = [];
+        deleteBtn.classList.add('hidden');
+    }
+    renderActionList();
+    modal.classList.remove('hidden');
+}
+
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function renderActionList() {
+    const container = document.getElementById('macro-actions-container');
+    if (!container) return;
+    container.innerHTML = "";
+    if (!CP.editingMacroActions || CP.editingMacroActions.length === 0) {
+        container.innerHTML = `<div class="text-gray-500 text-sm italic py-2">
+            No actions yet. Use the buttons above to add steps.
+        </div>`;
+        return;
+    }
+
+    CP.editingMacroActions.forEach((action, index) => {
+        const label = action.label || (action.type ? action.type.toUpperCase() : 'ACTION');
+        let actionHtml = `<div class="bg-gray-800/80 border border-gray-700 rounded-sm p-2 mb-2 relative">`;
+        actionHtml += `<div class="flex justify-between items-center mb-1">
+            <div class="flex items-center space-x-1">
+                <span class="text-xs font-semibold text-purple-300">${escapeHtml(label)}</span>
+                <span class="text-[9px] text-gray-400 px-1 border border-gray-600 rounded">${escapeHtml(action.type || '')}</span>
+            </div>
+            <div class="flex items-center space-x-1">
+                <button type="button" class="text-[10px] px-1 border border-gray-600 rounded hover:bg-gray-700"
+                    title="Move Up" onclick="moveMacroAction(${index}, -1)">↑</button>
+                <button type="button" class="text-[10px] px-1 border border-gray-600 rounded hover:bg-gray-700"
+                    title="Move Down" onclick="moveMacroAction(${index}, 1)">↓</button>
+                <button type="button" class="text-xs bg-red-900/70 text-red-200 px-1 rounded hover:bg-red-700"
+                    title="Remove" onclick="removeAction(${index})">✖</button>
+            </div>
+        </div>`;
+
+        // Body controls
+        actionHtml += `<div class="pt-1">`;
+
+        switch (action.type) {
+            case 'clock': {
+                const op = action.operation || 'set';
+                actionHtml += `<div class="flex space-x-2">
+                    <select class="w-1/2 bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                        data-action-index="${index}" data-field="operation"
+                        onchange="CP.editingMacroActions[${index}].operation = this.value; renderActionList();">
+                        <option value="set" ${op === 'set' ? 'selected' : ''}>Set Time</option>
+                        <option value="start" ${op === 'start' ? 'selected' : ''}>Start Clock</option>
+                        <option value="stop" ${op === 'stop' ? 'selected' : ''}>Stop Clock</option>
+                    </select>`;
+                if (op === 'set') {
+                    actionHtml += `<input type="text" value="${escapeHtml(action.time || '')}"
+                        placeholder="MM:SS" class="w-1/2 bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                        data-action-index="${index}" data-field="time"
+                        onchange="CP.editingMacroActions[${index}].time = this.value;">`;
+                }
+                actionHtml += `</div>`;
+                break;
+            }
+
+            case 'score': {
+                const team = action.team || 'A';
+                const operation = action.operation || 'add';
+                const amount = (action.amount !== undefined) ? action.amount : 0;
+                actionHtml += `<div class="flex space-x-2">
+                    <select class="w-1/3 bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                        data-action-index="${index}" data-field="team"
+                        onchange="CP.editingMacroActions[${index}].team = this.value;">
+                        <option value="A" ${team === 'A' ? 'selected' : ''}>Team A</option>
+                        <option value="B" ${team === 'B' ? 'selected' : ''}>Team B</option>
+                    </select>
+                    <select class="w-1/3 bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                        data-action-index="${index}" data-field="operation"
+                        onchange="CP.editingMacroActions[${index}].operation = this.value;">
+                        <option value="add" ${operation === 'add' ? 'selected' : ''}>Add</option>
+                        <option value="subtract" ${operation === 'subtract' ? 'selected' : ''}>Subtract</option>
+                        <option value="set" ${operation === 'set' ? 'selected' : ''}>Set</option>
+                    </select>
+                    <input type="number" class="w-1/3 bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                        value="${amount}" data-action-index="${index}" data-field="amount"
+                        onchange="CP.editingMacroActions[${index}].amount = parseInt(this.value, 10) || 0;">
+                </div>`;
+                break;
+            }
+
+            case 'graphic': {
+                const op = action.operation || 'show';
+                const duration = action.duration || 0;
+                actionHtml += `<div class="space-y-2">
+                    <div class="flex space-x-2">
+                        <select class="w-1/2 bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                            data-action-index="${index}" data-field="operation"
+                            onchange="CP.editingMacroActions[${index}].operation = this.value; renderActionList();">
+                            <option value="show" ${op === 'show' ? 'selected' : ''}>Show Graphic</option>
+                            <option value="hide" ${op === 'hide' ? 'selected' : ''}>Hide Graphic</option>
+                        </select>
+                        <input type="number" class="w-1/2 bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                            value="${duration}" placeholder="Duration ms"
+                            data-action-index="${index}" data-field="duration"
+                            onchange="CP.editingMacroActions[${index}].duration = parseInt(this.value,10) || 0;">
+                    </div>`;
+                if (op === 'show') {
+                    actionHtml += `
+                        <input type="text" class="w-full bg-gray-700 border border-gray-600 rounded-sm text-sm p-1 mt-1"
+                            placeholder="Title" value="${escapeHtml(action.title || '')}"
+                            data-action-index="${index}" data-field="title"
+                            onchange="CP.editingMacroActions[${index}].title = this.value;">
+                        <input type="text" class="w-full bg-gray-700 border border-gray-600 rounded-sm text-sm p-1 mt-1"
+                            placeholder="Subtitle" value="${escapeHtml(action.subtitle || '')}"
+                            data-action-index="${index}" data-field="subtitle"
+                            onchange="CP.editingMacroActions[${index}].subtitle = this.value;">`;
+                }
+                actionHtml += `</div>`;
+                break;
+            }
+
+            case 'quarter': {
+                const sport = (CP.channelSettings && CP.channelSettings.sportType) || 'football';
+                const periods = (SPORT_CONFIG[sport] && SPORT_CONFIG[sport].periods) ? SPORT_CONFIG[sport].periods : [{ val:'Q1', label:'Q1' }];
+                actionHtml += `<select class="w-full bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                    data-action-index="${index}" data-field="value"
+                    onchange="CP.editingMacroActions[${index}].value = this.value;">`;
+                periods.forEach(p => {
+                    actionHtml += `<option value="${p.val}" ${action.value === p.val ? 'selected' : ''}>${p.label}</option>`;
+                });
+                actionHtml += `</select>`;
+                break;
+            }
+
+            case 'possession': {
+                const v = action.value || 'none';
+                actionHtml += `<select class="w-full bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                    data-action-index="${index}" data-field="value"
+                    onchange="CP.editingMacroActions[${index}].value = this.value;">
+                    <option value="none" ${v === 'none' ? 'selected' : ''}>None</option>
+                    <option value="teamA" ${v === 'teamA' ? 'selected' : ''}>Team A</option>
+                    <option value="teamB" ${v === 'teamB' ? 'selected' : ''}>Team B</option>
+                </select>`;
+                break;
+            }
+
+            case 'log': {
+                const types = [
+                    { val: 'commentary', label: 'Commentary' },
+                    { val: 'score', label: 'Score' },
+                    { val: 'graphic', label: 'Graphic' },
+                    { val: 'operator', label: 'Operator' },
+                    { val: 'event', label: 'Event' },
+                ];
+                const lt = action.logType || 'commentary';
+                actionHtml += `<select class="w-full bg-gray-700 border border-gray-600 rounded-sm text-sm p-1 mb-1"
+                    data-action-index="${index}" data-field="logType"
+                    onchange="CP.editingMacroActions[${index}].logType = this.value;">`;
+                types.forEach(t => {
+                    actionHtml += `<option value="${t.val}" ${lt === t.val ? 'selected' : ''}>${t.label}</option>`;
+                });
+                actionHtml += `</select>
+                    <input type="text" class="w-full bg-gray-700 border border-gray-600 rounded-sm text-sm p-1"
+                        placeholder="Log text" value="${escapeHtml(action.text || '')}"
+                        data-action-index="${index}" data-field="text"
+                        onchange="CP.editingMacroActions[${index}].text = this.value;">`;
+                break;
+            }
+
+            default:
+                actionHtml += `<div class="text-xs text-gray-400 italic">Unknown action type.</div>`;
+        }
+
+        actionHtml += `</div></div>`;
+        container.insertAdjacentHTML('beforeend', actionHtml);
+    });
+}
+
+window.moveMacroAction = function(index, delta) {
+    if (!CP.editingMacroActions) return;
+    const newIndex = index + delta;
+    if (newIndex < 0 || newIndex >= CP.editingMacroActions.length) return;
+    const arr = CP.editingMacroActions;
+    const [item] = arr.splice(index, 1);
+    arr.splice(newIndex, 0, item);
+    renderActionList();
+}
+
+function addMacroAction(type) {
+    if (!CP.editingMacroActions) CP.editingMacroActions = [];
+    if (CP.currentTier && CP.currentTier.maxMacroSteps && CP.editingMacroActions.length >= CP.currentTier.maxMacroSteps) {
+        showToast('Max macro steps for your tier reached.', true);
+        return;
+    }
+    const defaults = {
+        clock:      { type: 'clock', operation: 'set', time: '15:00', label: 'Clock' },
+        score:      { type: 'score', team: 'A', operation: 'add', amount: 1, label: 'Score' },
+        graphic:    { type: 'graphic', operation: 'show', title: '', subtitle: '', duration: 3000, label: 'Graphic' },
+        quarter:    { type: 'quarter', value: 'Q1', label: 'Quarter' },
+        possession: { type: 'possession', value: 'none', label: 'Possession' },
+        log:        { type: 'log', logType: 'commentary', text: '', label: 'Log Entry' }
+    };
+    if (defaults[type]) {
+        CP.editingMacroActions.push(JSON.parse(JSON.stringify(defaults[type])));
+        renderActionList();
+    }
+}
+
+window.removeAction = function(index) {
+    if (!CP.editingMacroActions || index < 0 || index >= CP.editingMacroActions.length) return;
+    CP.editingMacroActions.splice(index, 1);
+    renderActionList();
+}
+
+function syncMacroForm() {
+    const container = document.getElementById('macro-actions-container');
+    if (!CP.editingMacroActions) return;
+    const inputs = container.querySelectorAll('[data-action-index]');
+    inputs.forEach(input => {
+        const idx = parseInt(input.dataset.actionIndex);
+        const field = input.dataset.field;
+        if (field && CP.editingMacroActions[idx]) {
+            CP.editingMacroActions[idx][field] = input.value;
+        }
+    });
+}
+
+async function saveMacroFromForm() {
+    syncMacroForm();
+    const form = document.getElementById('macro-form');
+    const idField = document.getElementById('macro-id');
+    const scopeSelect = document.getElementById('macro-scope');
+    if (!form || !scopeSelect) return;
+
+    const isNew = !idField.value;
+    const rawScope = scopeSelect.value || 'shared';
+    // Allow three scopes: shared, personal, and local (browser-only)
+    const scope = (rawScope === 'personal' || rawScope === 'local') ? rawScope : 'shared';
+
+    // Tier limit applies only to total macros
+    if (isNew && CP.currentTier && CP.currentTier.maxMacros && CP.macros.length >= CP.currentTier.maxMacros) {
+        showToast('Max macros for your tier reached.', true);
+        return;
+    }
+
+    const id = idField.value || null;
+    const label = (form.label.value || '').trim() || 'Untitled';
+    const actions = (CP.editingMacroActions || []).map(a => {
+        const copy = JSON.parse(JSON.stringify(a));
+        if (!copy.label) copy.label = (copy.type ? copy.type.toUpperCase() : 'ACTION');
+        return copy;
+    });
+
+    const macro = {
+        label,
+        actions,
+        scope,
+        protected: (scope === 'shared' && !CP.isOwner) ? true : false,
+        ownerId: userId || null,
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp()
+    };
+
+    const hasChannel = !!CP.gameId;
+    try {
+        // Locally-saved macros never touch Firestore, even if a channel is active
+        if (hasChannel && db && scope !== 'local') {
+            const basePath = `artifacts/${appId}/public/data/broadcasts/${CP.gameId}`;
+            if (scope === 'shared') {
+                const colRef = collection(db, `${basePath}/macros`);
+                if (id) {
+                    await setDoc(doc(colRef, id), macro, { merge: true });
+                } else {
+                    const created = await addDoc(colRef, macro);
+                    macro.id = created.id;
+                    idField.value = created.id;
+                }
+            } else {
+                if (!userId) {
+                    showToast("Cannot save personal macro without a logged-in user.", true);
+                } else {
+                    const colRef = collection(db, `${basePath}/users/${userId}/macros`);
+                    if (id) {
+                        await setDoc(doc(colRef, id), macro, { merge: true });
+                    } else {
+                        const created = await addDoc(colRef, macro);
+                        macro.id = created.id;
+                        idField.value = created.id;
+                    }
+                }
+            }
+        } else {
+            // Local only fallback
+            macro.id = id || `m_${Date.now()}`;
+            const idx = (CP.macros || []).findIndex(m => m.id === macro.id);
+            if (idx >= 0) CP.macros[idx] = macro;
+            else (CP.macros || (CP.macros = [])).push(macro);
+            persistMacrosLocal();
+            renderMacros();
+        }
+    } catch (e) {
+        console.error("Error saving macro", e);
+        if (e && e.code === 'permission-denied') {
+            // Fallback: save locally only
+            macro.id = id || macro.id || `m_${Date.now()}`;
+            const idxMacro = (CP.macros || []).findIndex(m => m.id === macro.id);
+            if (idxMacro >= 0) CP.macros[idxMacro] = macro;
+            else (CP.macros || (CP.macros = [])).push(macro);
+            persistMacrosLocal();
+            renderMacros();
+            CP.editingMacroActions = [];
+            document.getElementById('macro-modal').classList.add('hidden');
+            showToast("Macro saved locally (Firestore permissions denied).", false);
+            return;
+        }
+        showToast("Error saving macro.", true);
+        return;
+    }
+
+    const persistedId = macro.id || idField.value || id;
+    if (persistedId) {
+        macro.id = persistedId;
+        const macroWithId = { ...macro, id: persistedId, scope };
+        const existingIdx = (CP.macros || []).findIndex(m => m.id === persistedId);
+        if (existingIdx >= 0) CP.macros[existingIdx] = macroWithId;
+        else (CP.macros || (CP.macros = [])).push(macroWithId);
+        persistMacrosLocal();
+        renderMacros();
+    }
+
+    CP.editingMacroActions = [];
+    document.getElementById('macro-modal').classList.add('hidden');
+    showToast('Macro saved.', false);
+}
+
+async function deleteMacro(id) {
+    if (!id) return;
+    if (!confirm("Delete this macro?")) return;
+
+    const macro = (CP.macros || []).find(m => m.id === id);
+    const scope = macro ? (macro.scope || 'shared') : 'shared';
+
+    const hasChannel = !!CP.gameId;
+    try {
+        // Locally-saved macros never touch Firestore, even if a channel is active
+        if (hasChannel && db && scope !== 'local') {
+            const basePath = `artifacts/${appId}/public/data/broadcasts/${CP.gameId}`;
+            if (scope === 'shared') {
+                await deleteDoc(doc(db, `${basePath}/macros/${id}`));
+            } else if (scope === 'personal' && userId) {
+                await deleteDoc(doc(db, `${basePath}/users/${userId}/macros/${id}`));
+            }
+        }
+        CP.macros = (CP.macros || []).filter(m => m.id !== id);
+        persistMacrosLocal();
+        renderMacros();
+    } catch (e) {
+        console.error("Error deleting macro", e);
+        showToast("Error deleting macro.", true);
+        return;
+    }
+
+    document.getElementById('macro-modal').classList.add('hidden');
+    showToast('Macro deleted.', false);
+}
+
+function exportMacrosAsJson() {
+    const payload = {
+        channelId: CP.gameId || null,
+        exportedAt: new Date().toISOString(),
+        macros: (CP.macros || []).map(m => ({
+            label: m.label,
+            actions: m.actions,
+            scope: m.scope || 'shared'
+        }))
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `scoreops-macros-${CP.gameId || 'local'}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+async function importMacrosFromJson(jsonText) {
+    let parsed;
+    try {
+        parsed = JSON.parse(jsonText);
+    } catch (e) {
+        showToast("Invalid JSON.", true);
+        return;
+    }
+    if (!parsed || !Array.isArray(parsed.macros)) {
+        showToast("JSON does not contain a macros array.", true);
+        return;
+    }
+
+    const hasChannel = !!CP.gameId && !!db;
+    const basePath = hasChannel ? `artifacts/${appId}/public/data/broadcasts/${CP.gameId}` : null;
+
+    for (const m of parsed.macros) {
+        const requestedScope = m.scope || 'shared';
+        const scope = (requestedScope === 'personal' && !CP.isOwner) ? 'personal' : requestedScope;
+        const macro = {
+            label: m.label || 'Imported Macro',
+            actions: Array.isArray(m.actions) ? m.actions : [],
+            scope,
+            protected: false,
+            ownerId: userId || null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+        };
+
+        try {
+            // Locally-saved macros are always imported to this browser only
+            if (hasChannel && scope !== 'local') {
+                if (scope === 'shared') {
+                    const colRef = collection(db, `${basePath}/macros`);
+                    await addDoc(colRef, macro);
+                } else if (scope === 'personal' && userId) {
+                    const colRef = collection(db, `${basePath}/users/${userId}/macros`);
+                    await addDoc(colRef, macro);
+                } else {
+                    // no user id for personal; fallback to shared
+                    const colRef = collection(db, `${basePath}/macros`);
+                    await addDoc(colRef, macro);
+                }
+            } else {
+                // Local only
+                macro.id = `imported_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                (CP.macros || (CP.macros = [])).push(macro);
+            }
+        } catch (e) {
+            console.error("Error importing macro", e);
+            showToast("Error importing some macros.", true);
+        }
+    }
+
+    persistMacrosLocal();
+    renderMacros();
+    showToast("Macros imported.", false);
+}
+
+// Wire Import / Export buttons once DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    const exportBtn = document.getElementById('cp-macros-export-btn');
+    if (exportBtn) exportBtn.addEventListener('click', exportMacrosAsJson);
+
+    const importBtn = document.getElementById('cp-macros-import-btn');
+    const importInput = document.getElementById('cp-macros-import-input');
+    if (importBtn && importInput) {
+        // Clicking the label triggers the hidden file input
+        importBtn.addEventListener('click', () => {
+            importInput.click();
+        });
+
+        importInput.addEventListener('change', () => {
+            const file = importInput.files && importInput.files[0];
+            if (!file) return;
+
+            const isJsonType = !file.type || file.type === 'application/json';
+            const hasJsonExtension = file.name.toLowerCase().endsWith('.json');
+            if (!isJsonType && !hasJsonExtension) {
+                showToast("Please select a JSON file.", true);
+                importInput.value = "";
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const text = e.target && e.target.result;
+                if (typeof text === 'string' && text.trim()) {
+                    importMacrosFromJson(text.trim());
+                } else {
+                    showToast("Selected file is empty.", true);
+                }
+                importInput.value = "";
+            };
+            reader.onerror = () => {
+                showToast("Failed to read JSON file.", true);
+                importInput.value = "";
+            };
+            reader.readAsText(file);
+        });
+    }
+});
+async function executeGlobalReset() { playAudioCue('error'); CP.localState.scoreA = 0; CP.localState.scoreB = 0; CP.localState.clock = "15:00"; CP.localState.quarter = "Q1"; CP.localState.activeGraphic = null; CP.localState.clockState = "stopped"; CP.localState.possession = "none"; CP.localState.clockDirection = 'down'; CP.localState.visualMode = "rounded"; await updateMainDoc(CP.localState); sendEvent("config", `--- SCOREBOARD RESET (GLOBAL) by ${CP.operatorName} ---`, {}, CP.eventsCollectionRef); showToast("Global Scoreboard Reset DEPLOYED.", false); }
+        function disconnectFromChannel() { cleanupListeners(CP.listeners); clearMacroSubscriptions(); CP.gameId = null; CP.operatorName = null; CP.gameDocRef = null; CP.eventsCollectionRef = null; CP.operatorLogCollectionRef = null; CP.usersCollectionRef = null; CP.settingsDocRef = null; CP.isOwner = false; CP.combinedLogEvents = { public: [], operator: [] }; CP.globalState = {}; CP.localState.stagedEvents = []; CP.localState.stagedFields = []; document.getElementById('cp-game-id').disabled = false; document.getElementById('cp-operator-name').disabled = false; document.getElementById('connection-box').classList.remove('hidden'); document.getElementById('connected-box').classList.add('hidden'); document.getElementById('cp-controls').classList.add('opacity-20', 'pointer-events-none'); document.getElementById('cp-master-controls').classList.add('hidden'); document.getElementById('cp-combined-log-section').classList.add('hidden'); document.getElementById('cp-users-section').classList.add('hidden'); document.getElementById('cp-channel-settings-btn').classList.add('hidden'); document.getElementById('owner-status').classList.add('hidden'); document.getElementById('cp-staging-area').classList.add('hidden'); document.getElementById('cp-deploy-live-btn').classList.add('hidden'); document.getElementById('cp-macros-section').classList.add('hidden'); document.getElementById('cp-combined-log').innerHTML = ""; updateConnectionStatusUI(); updateDocumentTitleWithChannel(); showToast("Disconnected.", false); }
+        function applySecurityPermissions(isAnonymous) { const disabled = isAnonymous; const title = isAnonymous ? "Login required" : ""; const elementsToSecure = [ document.getElementById('cp-reset-scoreboard-global'), document.getElementById('cp-update-names'), document.getElementById('cp-commentary-public-btn'), document.getElementById('cp-graphic-show'), document.getElementById('cp-graphic-hide'), document.getElementById('cp-clear-log-btn') ]; elementsToSecure.forEach(el => { if (el) { el.disabled = disabled; el.title = title; if (disabled) el.classList.add('opacity-50', 'cursor-not-allowed'); else el.classList.remove('opacity-50', 'cursor-not-allowed'); } }); document.getElementById('cp-clear-log-btn').classList.toggle('hidden', isAnonymous); }
+        function updateDynamicElements() { const penaltySelect = document.getElementById('cp-penalty-team'); const turnoverSelect = document.getElementById('cp-turnover-team'); const possTeamABtn = document.getElementById('cp-poss-a-btn'); const possTeamBBtn = document.getElementById('cp-poss-b-btn'); const nameA = CP.localState.teamAName; const nameB = CP.localState.teamBName; penaltySelect.innerHTML = `<option value="teamA">${nameA}</option><option value="teamB">${nameB}</option>`; turnoverSelect.innerHTML = `<option value="teamA">Possession: ${nameA}</option><option value="teamB">Possession: ${nameB}</option>`; possTeamABtn.innerHTML = `Possession: ${nameA}`; possTeamBBtn.innerHTML = `Possession: ${nameB}`; }
+        function initControlPanelCombinedLog() { if (!CP.eventsCollectionRef || !CP.operatorLogCollectionRef) return; const publicQuery = query(CP.eventsCollectionRef, orderBy("timestamp", "desc"), limit(10)); const unsubPublic = onSnapshot(publicQuery, (snapshot) => { CP.combinedLogEvents.public = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, collection: 'public' })); renderCombinedLog(); }); const operatorQuery = query(CP.operatorLogCollectionRef, orderBy("timestamp", "desc"), limit(10)); const unsubOperator = onSnapshot(operatorQuery, (snapshot) => { CP.combinedLogEvents.operator = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, collection: 'operator' })); renderCombinedLog(); }); CP.listeners.push(unsubPublic, unsubOperator); }
+        function renderCombinedLog() { const logContainer = document.getElementById('cp-combined-log'); logContainer.innerHTML = ""; const allEvents = [...CP.combinedLogEvents.public, ...CP.combinedLogEvents.operator]; allEvents.sort((a, b) => { const timeA = a.timestamp ? a.timestamp.toMillis() : Date.now(); const timeB = b.timestamp ? b.timestamp.toMillis() : Date.now(); return timeB - timeA; }); const recentEvents = allEvents.slice(0, 15); if (recentEvents.length === 0) { logContainer.innerHTML = `<li class="text-gray-500 text-sm italic">No events yet.</li>`; return; } recentEvents.forEach(event => { const li = document.createElement('li'); li.className = "group flex justify-between items-start bg-gray-900/30 p-2 rounded hover:bg-gray-700/50 transition-colors mb-1"; li.classList.add(`log-font-${CP.settings.logFontSize}`); if (CP.settings.compactLog) li.classList.add('compact-log'); const contentDiv = document.createElement('div'); contentDiv.className = "flex-1 pr-2"; const time = event.timestamp ? new Date(event.timestamp.toMillis()).toLocaleTimeString() : "Pending..."; const isMine = event.operatorName === CP.operatorName; let textColorClass = "text-gray-300"; if (isMine && event.type !== 'operator_comment') textColorClass = "text-green-400"; else if (isMine && event.type === 'operator_comment') textColorClass = "text-cyan-300 font-bold"; else if (event.type === 'operator_comment') textColorClass = "text-cyan-300"; contentDiv.innerHTML = `<span class="text-gray-500 text-xs mr-2">[${time}]</span> <span class="${textColorClass}">${event.text}</span>`; li.appendChild(contentDiv); if (!CP.isAnonymous) { const deleteBtn = document.createElement('button'); deleteBtn.className = "text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity px-1 font-bold text-lg leading-none self-start"; deleteBtn.innerHTML = "&times;"; deleteBtn.onclick = (e) => { e.stopPropagation(); CP.confirmAction = 'deleteEvent'; CP.confirmData = { id: event.id, collection: event.collection }; document.getElementById('confirm-modal-text').innerText = `Delete: "${event.text}"?`; document.getElementById('confirm-modal').classList.remove('hidden'); }; li.appendChild(deleteBtn); } logContainer.appendChild(li); }); }
+        function createStagingItem(text, onRemove) { const li = document.createElement('li'); li.className = "group flex justify-between items-center text-yellow-300 text-sm bg-gray-900/30 p-1 rounded hover:bg-gray-700/50 transition-colors"; li.innerHTML = `<span>${text}</span>`; const removeBtn = document.createElement('button'); removeBtn.className = "text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity px-2 font-bold"; removeBtn.innerHTML = "&times;"; removeBtn.onclick = (e) => { e.stopPropagation(); playAudioCue('click'); onRemove(); }; li.appendChild(removeBtn); return li; }
+        function updateStagedEventsUI() { 
+            const list = document.getElementById('cp-staged-events-list'); if (!list) return; 
+            list.innerHTML = ""; 
+            const globalState = CP.globalState; 
+            const localState = CP.localState; 
+            let stagedCount = 0; 
+            
+            if (localState.scoreA !== globalState.scoreA || localState.scoreB !== globalState.scoreB) { 
+                list.appendChild(createStagingItem(`SCORE: ${localState.scoreA} - ${localState.scoreB}`, () => { 
+                    CP.localState.scoreA = CP.globalState.scoreA; 
+                    CP.localState.scoreB = CP.globalState.scoreB; 
+                    updateControlPanelUI(); 
+                })); 
+                stagedCount++; 
+            } 
+            if (localState.teamAName !== globalState.teamAName || localState.teamBName !== globalState.teamBName || 
+                localState.teamAColor1 !== globalState.teamAColor1 || localState.teamAColor2 !== globalState.teamAColor2 ||
+                localState.teamBColor1 !== globalState.teamBColor1 || localState.teamBColor2 !== globalState.teamBColor2) { 
+                list.appendChild(createStagingItem(`TEAMS & COLORS: ${localState.teamAName} / ${localState.teamBName}`, () => { 
+                    CP.localState.teamAName = CP.globalState.teamAName; 
+                    CP.localState.teamBName = CP.globalState.teamBName; 
+                    CP.localState.teamALogo = CP.globalState.teamALogo; 
+                    CP.localState.teamBLogo = CP.globalState.teamBLogo; 
+                    CP.localState.teamAColor1 = CP.globalState.teamAColor1;
+                    CP.localState.teamAColor2 = CP.globalState.teamAColor2;
+                    CP.localState.teamBColor1 = CP.globalState.teamBColor1;
+                    CP.localState.teamBColor2 = CP.globalState.teamBColor2;
+                    updateControlPanelUI(); 
+                })); 
+                stagedCount++; 
+            } 
+            if (JSON.stringify(localState.activeGraphic) !== JSON.stringify(globalState.activeGraphic)) { 
+                list.appendChild(createStagingItem(localState.activeGraphic ? `GRAPHIC: ${localState.activeGraphic.title}` : "GRAPHIC: HIDE", () => { 
+                    CP.localState.activeGraphic = CP.globalState.activeGraphic; 
+                    updateControlPanelUI(); 
+                })); 
+                stagedCount++; 
+            } 
+            if (localState.clock !== globalState.clock || localState.quarter !== globalState.quarter || localState.clockDirection !== globalState.clockDirection) { 
+                list.appendChild(createStagingItem(`CLOCK: ${localState.quarter} - ${localState.clock}`, () => { 
+                    CP.localState.clock = CP.globalState.clock; 
+                    CP.localState.quarter = CP.globalState.quarter; 
+                    CP.localState.clockDirection = CP.globalState.clockDirection; 
+                    updateControlPanelUI(); 
+                })); 
+                stagedCount++; 
+            } 
+            if (localState.possession !== globalState.possession) { 
+                const possName = localState.possession === 'teamA' ? localState.teamAName : (localState.possession === 'teamB' ? localState.teamBName : 'None'); 
+                list.appendChild(createStagingItem(`POSSESSION: ${possName}`, () => { 
+                    CP.localState.possession = CP.globalState.possession; 
+                    updateControlPanelUI(); 
+                })); 
+                stagedCount++; 
+            } 
+            localState.stagedEvents.forEach((event, index) => { 
+                list.appendChild(createStagingItem(`[EVENT] ${event.text}`, () => { 
+                    CP.localState.stagedEvents.splice(index, 1); 
+                    updateStagedEventsUI(); 
+                })); 
+                stagedCount++; 
+            }); 
+            
+            if (stagedCount === 0) { list.innerHTML = `<li class="text-gray-500 text-sm italic">No staged items.</li>`; } 
+        }
+        
+        function updateControlPanelUI() {
+            const setStaged = (elementId, localKey, globalKey = localKey) => { const el = document.getElementById(elementId); if (!el) return; let isStaged; if (localKey === 'activeGraphic') isStaged = JSON.stringify(CP.localState.activeGraphic) !== JSON.stringify(CP.globalState.activeGraphic); else isStaged = CP.globalState[globalKey] !== undefined && CP.localState[localKey] !== CP.globalState[globalKey]; el.classList.toggle('staged-field', isStaged); };
+            
+            const scoreAEl = document.getElementById('cp-score-a'); const scoreBEl = document.getElementById('cp-score-b'); 
+            scoreAEl.innerText = CP.localState.scoreA; scoreBEl.innerText = CP.localState.scoreB; setStaged('cp-score-a', 'scoreA'); setStaged('cp-score-b', 'scoreB'); 
+            
+            document.getElementById('cp-team-a-name').value = CP.localState.teamAName; document.getElementById('cp-team-b-name').value = CP.localState.teamBName; 
+            document.getElementById('cp-team-a-logo').value = CP.localState.teamALogo || ""; document.getElementById('cp-team-b-logo').value = CP.localState.teamBLogo || ""; 
+            document.getElementById('cp-team-a-display').innerText = CP.localState.teamAName; document.getElementById('cp-team-b-display').innerText = CP.localState.teamBName; 
+            
+            document.getElementById('cp-team-a-color-1').value = CP.localState.teamAColor1 || "#1e3a8a";
+            document.getElementById('cp-team-a-color-2').value = CP.localState.teamAColor2 || "#111827";
+            document.getElementById('cp-team-b-color-1').value = CP.localState.teamBColor1 || "#991b1b";
+            document.getElementById('cp-team-b-color-2').value = CP.localState.teamBColor2 || "#450a0a";
+
+            setStaged('cp-team-a-name', 'teamAName'); setStaged('cp-team-b-name', 'teamBName'); 
+            setStaged('cp-team-a-logo', 'teamALogo'); setStaged('cp-team-b-logo', 'teamBLogo'); 
+            setStaged('cp-team-a-color-1', 'teamAColor1'); setStaged('cp-team-a-color-2', 'teamAColor2');
+            setStaged('cp-team-b-color-1', 'teamBColor1'); setStaged('cp-team-b-color-2', 'teamBColor2');
+
+            const clockInput = document.getElementById('cp-clock');
+            if (CP.globalState.clockState !== "running") { clockInput.value = CP.localState.clock || "15:00"; }
+            
+            if (CP.localState.clockState === 'running') { clockInput.classList.remove('border-gray-600', 'border-red-600'); clockInput.classList.add('border-green-500', 'ring-1', 'ring-green-500'); } 
+            else { clockInput.classList.remove('border-gray-600', 'border-green-500', 'ring-green-500'); clockInput.classList.add('border-red-600'); clockInput.classList.remove('ring-1'); }
+            
+            document.getElementById('cp-quarter').value = CP.localState.quarter || "Q1"; 
+            setStaged('cp-clock', 'clock'); setStaged('cp-quarter', 'quarter'); 
+            
+            const dirBtn = document.getElementById('cp-clock-dir-btn');
+            const currentDir = CP.localState.clockDirection || 'down';
+            dirBtn.innerHTML = currentDir === 'up' ? '▲' : '▼';
+            dirBtn.title = currentDir === 'up' ? 'Counting Up' : 'Counting Down';
+            dirBtn.classList.toggle('staged-field', currentDir !== CP.globalState.clockDirection);
+
+            const graphicTitleEl = document.getElementById('cp-graphic-title'); const graphicSubtitleEl = document.getElementById('cp-graphic-subtitle'); 
+            if (CP.localState.activeGraphic) { graphicTitleEl.value = CP.localState.activeGraphic.title || ""; graphicSubtitleEl.value = CP.localState.activeGraphic.subtitle || ""; } else { graphicTitleEl.value = ""; graphicSubtitleEl.value = ""; } 
+            const isGraphicStaged = JSON.stringify(CP.localState.activeGraphic) !== JSON.stringify(CP.globalState.activeGraphic); graphicTitleEl.classList.toggle('staged-field', isGraphicStaged); graphicSubtitleEl.classList.toggle('staged-field', isGraphicStaged); 
+            
+            const possA = document.getElementById('cp-poss-a-icon'); const possB = document.getElementById('cp-poss-b-icon'); possA.classList.toggle('hidden', CP.localState.possession !== 'teamA'); possB.classList.toggle('hidden', CP.localState.possession !== 'teamB'); 
+            const isPossStaged = CP.localState.possession !== CP.globalState.possession; document.getElementById('cp-poss-a-btn').classList.toggle('staged-field', isPossStaged); document.getElementById('cp-poss-b-btn').classList.toggle('staged-field', isPossStaged); 
+            const isClearStaged = CP.localState.possession === 'none' && CP.globalState.possession !== 'none'; document.getElementById('cp-poss-clear-btn').classList.toggle('staged-field', isClearStaged);
+            
+            updateDynamicElements(); updateStagedEventsUI();
+        }
+
+        function updateConnectionStatusUI() {
+            const statusEl = document.getElementById('cp-connection-status');
+            if (!statusEl) return;
+            if (!CP.gameId) {
+                statusEl.innerHTML = `<div class="text-gray-400 font-medium">Status: Not Connected</div><div class="text-gray-400 text-xs">Room Created By: --</div><div class="text-gray-400 text-xs">Channel Nickname: --</div>`;
+                return;
+            }
+            const ownerLabel = (CP.channelSettings && (CP.channelSettings.ownerEmail || CP.channelSettings.ownerName)) || 'Unknown';
+            const nickname = (CP.channelSettings && (CP.channelSettings.nickname || '').trim()) || CP.gameId;
+            statusEl.innerHTML = `<div class="text-green-400 font-medium">Status: Connected to ${CP.gameId} as ${CP.operatorName}</div><div class="text-gray-300 text-xs">Room Created By: ${ownerLabel}</div><div class="text-gray-300 text-xs">Channel Nickname: ${nickname}</div>`;
+        }
+
+        function updateDocumentTitleWithChannel() {
+            const nickname = (CP.channelSettings && (CP.channelSettings.nickname || '').trim()) || '';
+            if (CP.gameId) {
+                document.title = `${nickname || CP.gameId} - ScoreOps Controller`;
+            } else {
+                document.title = baseTitle;
+            }
+        }
+
+        async function sendEvent(type, text, additionalData = {}, targetCollection, skipToast = false) { if (!targetCollection) return; const eventData = { type, text, timestamp: serverTimestamp(), operatorName: CP.operatorName, ...additionalData }; try { await addDoc(targetCollection, eventData); if (!skipToast) showToast(`Event sent: ${type}`, false); } catch (e) { showToast("Error sending event.", true); } }
+        async function updateMainDoc(dataToUpdate) { if (!CP.gameDocRef) return; try { await setDoc(CP.gameDocRef, dataToUpdate, { merge: true }); } catch (e) { showToast("Error updating game state.", true); } }
+        function applyControlPanelSettings() { const logContainer = document.getElementById('cp-combined-log'); if (!logContainer) return; logContainer.classList.remove('log-font-sm', 'log-font-lg', 'log-font-md'); logContainer.classList.add(`log-font-${CP.settings.logFontSize}`); if (CP.settings.compactLog) logContainer.classList.add('compact-logs'); else logContainer.classList.remove('compact-logs'); const mainGrid = document.getElementById('main-grid'); if (CP.settings.layout === 'tall') { mainGrid.classList.remove('lg:grid-cols-3'); mainGrid.classList.add('lg:grid-cols-1'); } else { mainGrid.classList.remove('lg:grid-cols-1'); mainGrid.classList.add('lg:grid-cols-3'); } const panel = document.getElementById('control-panel'); panel.classList.remove('theme-light', 'theme-high-contrast'); if (CP.settings.theme === 'light') panel.classList.add('theme-light'); else if (CP.settings.theme === 'high-contrast') panel.classList.add('theme-high-contrast'); }
+        function loadControlPanelSettings() { let defaultSettings = { ...CP.settings }; try { const savedSettings = localStorage.getItem(CP_SETTINGS_KEY); if (savedSettings) CP.settings = { ...defaultSettings, ...JSON.parse(savedSettings) }; } catch (e) { } applyControlPanelSettings(); }
+        function saveControlPanelSettings() { const form = document.getElementById('local-settings-form'); CP.settings.theme = form.theme.value; CP.settings.layout = form.layout.value; CP.settings.logFontSize = form.logFontSize.value; CP.settings.compactLog = form.compactLog.checked; CP.settings.audioCues = form.audioCues.checked; CP.settings.confirmGlobalReset = form.confirmGlobalReset.checked; localStorage.setItem(CP_SETTINGS_KEY, JSON.stringify(CP.settings)); applyControlPanelSettings(); renderCombinedLog(); }
+        async function deleteSingleLogEvent() { if (!CP.confirmData) return; const { id, collection } = CP.confirmData; try { let colRef = (collection === 'public') ? CP.eventsCollectionRef : CP.operatorLogCollectionRef; await deleteDoc(doc(colRef, id)); showToast("Event deleted.", false); } catch (e) { showToast("Error deleting event.", true); } }
+        async function clearAllLogs() { showToast("Clearing all logs..."); try { const publicLogs = await getDocs(CP.eventsCollectionRef); const publicDeletes = publicLogs.docs.map(d => deleteDoc(d.ref)); const operatorLogs = await getDocs(CP.operatorLogCollectionRef); const operatorDeletes = operatorLogs.docs.map(d => deleteDoc(d.ref)); await Promise.all([...publicDeletes, ...operatorDeletes]); showToast("All logs cleared.", false); } catch (e) { showToast("Error clearing logs.", true); } }
+        
+        window.onload = initializeAppWrapper;
+
+    </script>
+
+</head>
+<body class="h-full text-gray-200">
+
+    <div id="app-loader" class="flex items-center justify-center h-full"><svg class="animate-spin h-10 w-10 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></div>
+
+    <div id="auth-view" class="hidden h-full flex items-center justify-center p-4 bg-gray-900">
+        <div class="w-full max-w-md">
+            <div class="text-center mb-6">
+                <img src="https://i.ibb.co/mVMRr6Dw/Untitled-2-4.png" alt="ScoreOps Logo" class="w-32 h-32 mx-auto mb-2 object-contain">
+                <h1 class="text-3xl font-bold text-white">ScoreOps Control</h1>
+            </div>
+            <div id="auth-error-message" class="text-red-400 text-center mb-4 min-h-[1.25rem]"></div>
+            <div class="bg-gray-800/50 p-6 border border-gray-700 rounded-sm space-y-4">
+                <form id="login-form" class="space-y-4"><div><label for="login-email" class="text-sm font-medium text-gray-300">Email</label><input type="email" id="login-email" name="email" required class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></div><div><label for="login-password" class="text-sm font-medium text-gray-300">Password</label><input type="password" id="login-password" name="password" required class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></div><button type="submit" class="w-full bg-blue-600 hover:opacity-90 text-white font-bold py-2 px-4 rounded-sm">Log In</button></form>
+                <hr class="border-gray-600"/>
+                <form id="signup-form" class="space-y-4"><div><label for="signup-email" class="text-sm font-medium text-gray-300">Email</label><input type="email" id="signup-email" name="email" required class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></div><div><label for="signup-password" class="text-sm font-medium text-gray-300">Password</label><input type="password" id="signup-password" name="password" required class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></div><div><label for="signup-password-confirm" class="text-sm font-medium text-gray-300">Confirm Password</label><input type="password" id="signup-password-confirm" name="passwordConfirm" required class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></div><button type="submit" class="w-full bg-green-600 hover:opacity-90 text-white font-bold py-2 px-4 rounded-sm">Sign Up</button></form>
+                <hr class="border-gray-600"/>
+                <button id="anon-login-btn" class="w-full bg-gray-600 hover:opacity-90 text-white font-bold py-2 px-4 rounded-sm">Continue Anonymously</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="control-panel" class="hidden h-full overflow-y-auto p-4 md:p-6 pb-32 bg-gray-900">
+        <div id="main-grid" class="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <div class="lg:col-span-2 space-y-6">
+                <header class="mb-4">
+                    <div class="flex justify-between items-center">
+                        <h1 class="text-3xl font-bold text-white flex items-center">
+                            <img src="https://i.ibb.co/mVMRr6Dw/Untitled-2-4.png" alt="ScoreOps" class="w-10 h-10 mr-3 object-contain">
+                            ScoreOps Productions
+                        </h1>
+                        <div class="flex items-center space-x-2">
+                            <button id="cp-local-settings-btn" 
+                              class="bg-gray-600 hover:opacity-90 text-white font-medium p-2 rounded-sm text-sm flex items-center justify-center">
+                              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" 
+                                   stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                                <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/>
+                                <path d="M19.4 13a7.96 7.96 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.4a.5.5 0 0 0-.6-.2l-2.5 1a8.12 8.12 0 0 0-1.7-1l-.4-2.7A.5.5 0 0 0 14.3 2h-4.6a.5.5 0 0 0-.5.4l-.4 2.7a8.12 8.12 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.4a.5.5 0 0 0 .1.6L4.6 11a7.96 7.96 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.4a.5.5 0 0 0 .6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.7a.5.5 0 0 0 .5.4h4.6a.5.5 0 0 0 .5-.4l.4-2.7c.6-.3 1.2-.6 1.7-1l2.5 1a.5.5 0 0 0 .6-.2l2-3.4a.5.5 0 0 0-.1-.6L19.4 13z"/>
+                              </svg>
+                            </button>
+                            <button id="sign-out-btn" class="bg-red-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm text-sm">Sign Out</button>
+                        </div>
+                    </div>
+                    <div id="user-status" class="text-gray-300 mt-2"></div>
+                    <div id="owner-status" class="text-gray-300 text-sm hidden"></div>
+                </header>
+
+                <section id="connection-box" class="bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                    <h2 class="text-xl font-semibold mb-3 text-gray-200">Connect to Channel</h2>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                         <input type="text" id="cp-game-id" placeholder="Enter Broadcast ID" class="flex-grow bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-3">
+                         <input type="text" id="cp-operator-name" placeholder="Enter Your Name" class="flex-grow bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-3">
+                    </div>
+                    <button id="cp-connect-btn" class="w-full bg-blue-600 hover:opacity-90 text-white font-bold py-3 px-6 rounded-sm transition-opacity duration-200 flex items-center justify-center space-x-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Connect / Create</span></button>
+                </section>
+                
+                <section id="connected-box" class="hidden bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                    <div id="cp-connection-status" class="mt-1 text-sm text-center">
+                        <div class="text-gray-400 font-medium">Status: Not Connected</div>
+                        <div class="text-gray-400 text-xs">Room Created By: --</div>
+                        <div class="text-gray-400 text-xs">Channel Nickname: --</div>
+                    </div>
+                </section>
+                
+                <div id="cp-controls" class="space-y-6 opacity-20 pointer-events-none transition-opacity duration-500">
+                    <section class="bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                        <h2 class="text-xl font-semibold mb-4 text-gray-200">Scoreboard & Teams</h2>
+                        
+                        <!-- Team Control Grid -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <!-- Team A Card -->
+                            <div class="p-3 bg-gray-900/60 border border-gray-600 rounded-sm">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h3 class="text-xs font-bold text-blue-400 uppercase tracking-wider">Home / Team A</h3>
+                                </div>
+                                <div class="space-y-2">
+                                    <input type="text" id="cp-team-a-name" placeholder="Name" class="w-full bg-gray-800 border border-gray-600 rounded-sm px-2 py-1 text-sm text-white">
+                                    <input type="text" id="cp-team-a-logo" placeholder="Logo URL" class="w-full bg-gray-800 border border-gray-600 rounded-sm px-2 py-1 text-sm text-white">
+                                    <div class="flex space-x-2 items-center">
+                                        <div class="flex-1">
+                                            <label class="block text-[10px] text-gray-500 uppercase">Grad Start</label>
+                                            <input type="color" id="cp-team-a-color-1" class="w-full h-6 bg-transparent cursor-pointer rounded-sm" value="#1e3a8a">
+                                        </div>
+                                        <div class="flex-1">
+                                            <label class="block text-[10px] text-gray-500 uppercase">Grad End</label>
+                                            <input type="color" id="cp-team-a-color-2" class="w-full h-6 bg-transparent cursor-pointer rounded-sm" value="#111827">
+                                        </div>
+                                    </div>
+                                    <button id="cp-reset-color-a" class="w-full bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 py-1 rounded-sm mt-2 transition-colors">Reset Colors</button>
+                                </div>
+                            </div>
+
+                            <!-- Team B Card -->
+                            <div class="p-3 bg-gray-900/60 border border-gray-600 rounded-sm">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h3 class="text-xs font-bold text-red-400 uppercase tracking-wider">Away / Team B</h3>
+                                </div>
+                                <div class="space-y-2">
+                                    <input type="text" id="cp-team-b-name" placeholder="Name" class="w-full bg-gray-800 border border-gray-600 rounded-sm px-2 py-1 text-sm text-white">
+                                    <input type="text" id="cp-team-b-logo" placeholder="Logo URL" class="w-full bg-gray-800 border border-gray-600 rounded-sm px-2 py-1 text-sm text-white">
+                                    <div class="flex space-x-2 items-center">
+                                        <div class="flex-1">
+                                            <label class="block text-[10px] text-gray-500 uppercase">Grad Start</label>
+                                            <input type="color" id="cp-team-b-color-1" class="w-full h-6 bg-transparent cursor-pointer rounded-sm" value="#991b1b">
+                                        </div>
+                                        <div class="flex-1">
+                                            <label class="block text-[10px] text-gray-500 uppercase">Grad End</label>
+                                            <input type="color" id="cp-team-b-color-2" class="w-full h-6 bg-transparent cursor-pointer rounded-sm" value="#450a0a">
+                                        </div>
+                                    </div>
+                                    <button id="cp-reset-color-b" class="w-full bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 py-1 rounded-sm mt-2 transition-colors">Reset Colors</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button id="cp-update-names" class="w-full bg-blue-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200 mb-6">Stage Team Info & Colors</button>
+                        
+                        <div class="flex justify-around items-start">
+                            <div class="text-center w-2/5">
+                                <div class="flex items-center justify-center space-x-2"><span id="cp-poss-a-icon" class="possession-indicator hidden">&bull;</span><span class="text-2xl font-bold uppercase" id="cp-team-a-display">Home</span></div>
+                                <div class="text-6xl font-black text-white my-3 transition-colors duration-200" id="cp-score-a">0</div>
+                                <div id="score-controls-a" class="space-y-2"></div>
+                            </div>
+                            <span class="text-4xl text-gray-500 font-light pt-10">VS</span>
+                            <div class="text-center w-2/5">
+                                <div class="flex items-center justify-center space-x-2"><span class="text-2xl font-bold uppercase" id="cp-team-b-display">Away</span><span id="cp-poss-b-icon" class="possession-indicator hidden">&bull;</span></div>
+                                <div class="text-6xl font-black text-white my-3 transition-colors duration-200" id="cp-score-b">0</div>
+                                <div id="score-controls-b" class="space-y-2"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                        <h2 class="text-xl font-semibold mb-3 text-gray-200">Clock & Game Status</h2>
+                        <div class="flex items-center space-x-2 mb-4">
+                            <input type="text" id="cp-clock" placeholder="Clock (e.g., 12:45)" class="flex-grow bg-gray-900 border border-gray-600 rounded-sm px-4 py-2 text-2xl font-mono text-yellow-400 text-center">
+                            <button id="cp-clock-dir-btn" class="bg-gray-700 hover:bg-gray-600 text-white w-12 h-[3rem] font-bold rounded-sm border border-gray-600 flex items-center justify-center" title="Toggle Count Up/Down">▼</button>
+                            <select id="cp-quarter" class="flex-grow bg-gray-900 border border-gray-600 rounded-sm px-4 py-2 h-[3rem]"></select>
+                        </div>
+                        <div class="grid grid-cols-3 gap-4 mt-4"><button id="cp-start-clock-btn" class="bg-green-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Start (Instant)</button><button id="cp-stop-clock-btn" class="bg-red-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Stop (Instant)</button><button id="cp-update-clock" class="bg-blue-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Stage Clock State</button></div>
+                    </section>
+                    
+                    <section class="bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                        <h2 class="text-xl font-semibold mb-3 text-gray-200">Quick Events</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="space-y-3"><label class="font-medium text-gray-300">Log Penalty</label><select id="cp-penalty-team" class="w-full bg-gray-900 border border-gray-600 rounded-sm px-4 py-2"></select><input type="text" id="cp-penalty-desc" placeholder="Penalty description" class="w-full bg-gray-900 border border-gray-600 rounded-sm px-4 py-2"><button id="cp-penalty-btn" class="w-full bg-yellow-600 hover:opacity-90 text-black font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Stage Penalty</button></div>
+                            <div class="space-y-3"><label class="font-medium text-gray-300">Log Turnover</label><select id="cp-turnover-team" class="w-full bg-gray-900 border border-gray-600 rounded-sm px-4 py-2"></select><button id="cp-turnover-btn" class="w-full bg-red-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200 mt-[2.6rem]">Stage Turnover</button></div>
+                            <div class="space-y-3">
+                                <label class="font-medium text-gray-300">Log Possession</label>
+                                <button id="cp-poss-a-btn" class="w-full bg-blue-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200 mb-2">Possession: Team A</button>
+                                <button id="cp-poss-b-btn" class="w-full bg-blue-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200 mb-2">Possession: Team B</button>
+                                <button id="cp-poss-clear-btn" class="w-full bg-gray-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Clear Possession</button>
+                            </div>
+                        </div>
+                    </section>
+                    
+                    <section class="bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                        <h2 class="text-xl font-semibold mb-3 text-gray-200">Commentary & Communications</h2>
+                        <textarea id="cp-commentary-text" rows="3" placeholder="Type commentary here..." class="w-full bg-gray-900 border border-gray-600 rounded-sm px-4 py-2"></textarea>
+                        <div class="flex space-x-4 mt-3"><button id="cp-commentary-public-btn" class="w-1/2 bg-red-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Stage Public</button><button id="cp-commentary-operator-btn" class="w-1/2 bg-cyan-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Send to Operators (Instant)</button></div>
+                    </section>
+                    
+                    <section class="bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                        <h2 class="text-xl font-semibold mb-3 text-gray-200">On-Screen Graphic</h2>
+                        <input type="text" id="cp-graphic-title" placeholder="Title (e.g., 'Player Spotlight')" class="w-full bg-gray-900 border border-gray-600 rounded-sm px-4 py-2 mb-3">
+                        <input type="text" id="cp-graphic-subtitle" placeholder="Subtitle (e.g., 'John Doe - 2 TDs')" class="w-full bg-gray-900 border border-gray-600 rounded-sm px-4 py-2 mb-3">
+                        <div class="flex items-center space-x-2 mb-3"><input type="number" id="cp-graphic-duration" placeholder="Duration (ms)" class="w-1/3 bg-gray-900 border border-gray-600 rounded-sm px-4 py-2" title="Set to 0 for infinite duration. E.g., 5000 = 5 seconds"><span class="text-xs text-gray-400">ms auto-hide (0 = off)</span></div>
+                        <div class="flex space-x-4"><button id="cp-graphic-show" class="w-1/2 bg-blue-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Stage Show</button><button id="cp-graphic-hide" class="w-1/2 bg-gray-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Stage Hide</button></div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- Right Column -->
+            <div class="lg:col-span-1 space-y-6">
+                
+                <section id="cp-master-controls" class="hidden bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                    <h2 class="text-xl font-semibold mb-3 text-gray-200">Master Controls</h2>
+                    <div class="space-y-3">
+                        <button id="cp-channel-settings-btn" class="hidden w-full bg-gray-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Channel Settings</button>
+                        <button id="cp-reset-scoreboard" class="w-full bg-yellow-600 hover:opacity-90 text-black font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Reset Score (LOCAL)</button>
+                        <button id="cp-reset-scoreboard-global" class="w-full bg-red-800 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Reset Scoreboard (GLOBAL)</button>
+                        <button id="cp-disconnect-btn" class="w-full bg-red-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm transition-opacity duration-200">Disconnect</button>
+                    </div>
+                </section>
+                
+                <section 
+id="cp-macros-section" class="hidden bg-gray-800/50 p-4 border border-purple-500 rounded-sm">
+                    <div class="flex justify-between items-center mb-3">
+                         <h2 class="text-xl font-semibold text-purple-400">Broadcast Macros</h2>
+                         <div class="flex items-center space-x-2">
+                             <button id="cp-macros-export-btn" class="text-xs px-2 py-1 border border-purple-600 rounded-sm text-purple-200 hover:bg-purple-800/60">Export JSON</button>
+                             <label id="cp-macros-import-btn" class="text-xs px-2 py-1 border border-purple-600 rounded-sm text-purple-200 hover:bg-purple-800/60 cursor-pointer">
+                                 Import JSON
+                                 <input type="file" id="cp-macros-import-input" accept=".json,application/json" class="hidden" />
+                             </label>
+                             <button id="cp-configure-macros-btn" class="text-xs text-gray-400 hover:text-white">Configure</button>
+                         </div>
+                    </div>
+                    <div id="cp-macros-grid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                        <div class="text-gray-500 text-sm italic col-span-2">No macros configured.</div>
+                    </div>
+                </section>
+
+                <section id="cp-staging-area" class="hidden bg-gray-800/50 p-4 border border-yellow-400 rounded-sm">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-xl font-semibold text-yellow-400">Staging Area</h2>
+                        <button id="cp-clear-staged-btn" title="Clear All Staged Items" class="text-red-500 hover:text-red-400 font-medium text-sm">Clear All</button>
+                    </div>
+                    <ul id="cp-staged-events-list" class="space-y-2 h-48 overflow-y-auto pr-2">
+                        <li class="text-gray-500 text-sm italic">No staged items.</li>
+                    </ul>
+                </section>
+
+                <section id="cp-combined-log-section" class="hidden bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-xl font-semibold text-gray-200">Combined Event Log</h2>
+                        <button id="cp-clear-log-btn" title="Clear All Logs" class="hidden text-red-500 hover:text-red-400 font-medium text-sm">Clear All</button>
+                    </div>
+                    <ul id="cp-combined-log" class="space-y-2 h-96 overflow-y-auto pr-2">
+                        <li class="text-gray-500 text-sm italic">Connecting to event log...</li>
+                    </ul>
+                </section>
+                
+                <section id="cp-users-section" class="hidden bg-gray-800/50 p-4 border border-gray-700 rounded-sm">
+                    <div class="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
+                        <h2 class="text-xl font-semibold text-gray-200">Channel Users</h2>
+                        <span class="text-xs text-gray-500">Auto-Update</span>
+                    </div>
+                    <ul id="cp-users-list" class="space-y-1 h-64 overflow-y-auto pr-2">
+                        <li class="text-gray-500 text-sm italic">Loading users...</li>
+                    </ul>
+                </section>
+            </div>
+        </div>
+
+        <!-- Modals are included below -->
+        <div id="channel-settings-modal" class="hidden fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <div class="w-full max-w-md bg-gray-800 border border-gray-700 rounded-sm shadow-2xl">
+                <div class="flex justify-between items-center p-4 border-b border-gray-700"><h2 class="text-xl font-semibold text-white">Channel Settings</h2><button id="channel-settings-close-btn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>
+                <form id="channel-settings-form" class="p-6 space-y-4">
+                    <div>
+                        <label for="settings-sport-type" class="text-sm font-medium text-gray-300">Broadcast Type</label>
+                        <select id="settings-sport-type" name="sportType" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></select>
+                    </div>
+
+                    <!-- New Visual Options -->
+                    <div>
+                        <label for="settings-visual-mode" class="text-sm font-medium text-gray-300">Visual Options (Layout)</label>
+                        <select id="settings-visual-mode" name="visualMode" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1">
+                            <option value="rounded">Gradient Fill Rounded (Default)</option>
+                            <option value="full">Fill Gradient (Corner to Corner)</option>
+                            <option value="crossfade">Gradient Fill Crossfade</option>
+                            <option value="single">Single Gradient (Team A Only)</option>
+                            <option value="flat">Background / No Gradient (Flat)</option>
+                        </select>
+                    </div>
+
+                    <div><label for="settings-nickname" class="text-sm font-medium text-gray-300">Channel Nickname</label><input type="text" id="settings-nickname" name="nickname" placeholder="Optional friendly name" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></div>
+                    <div><label for="settings-password" class="text-sm font-medium text-gray-300">Channel Password (Optional)</label><input type="text" id="settings-password" name="password" placeholder="Leave blank for no password" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"></div><div class="flex items-center space-x-3"><input type="checkbox" id="settings-require-login" name="requireLogin" class="h-4 w-4 bg-gray-900 border-gray-600 rounded-sm text-blue-500 focus:ring-blue-500"><label for="settings-require-login" class="text-sm text-gray-300">Require login to control?</label></div>
+
+                    <hr class="border-gray-700 my-4" />
+                    <div class="border border-red-800/60 bg-red-900/10 rounded-sm p-3">
+                        <h3 class="text-sm font-semibold text-red-400 mb-1">Delete Channel</h3>
+                        <p class="text-xs text-gray-300 mb-2">
+                            This will permanently delete this broadcast and all associated data.
+                            To confirm, type the Broadcast ID
+                            <span id="delete-channel-id-label" class="font-mono text-red-300"></span>
+                            below.
+                        </p>
+                        <input
+                            id="delete-channel-confirm-input"
+                            type="text"
+                            class="w-full bg-gray-900 border border-red-700 rounded-sm px-2 py-1 text-sm mb-2"
+                            placeholder="Type the Broadcast ID exactly to enable deletion"
+                        />
+                        <p id="delete-channel-error" class="text-xs text-red-400 mb-2 hidden"></p>
+                        <button
+                            type="button"
+                            id="delete-channel-btn"
+                            class="w-full bg-red-700 hover:bg-red-800 text-white font-semibold py-1.5 px-3 rounded-sm text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                            disabled
+                        >
+                            Delete Channel
+                        </button>
+                    </div>
+
+<button type="submit" class="w-full bg-blue-600 hover:opacity-90 text-white font-bold py-2 px-4 rounded-sm">Save Settings</button>
+                </form>
+            </div>
+        </div>
+        
+        <div id="local-settings-modal" class="hidden fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <div class="w-full max-w-md bg-gray-800 border border-gray-700 rounded-sm shadow-2xl flex flex-col max-h-[90vh]">
+                <div class="flex justify-between items-center p-4 border-b border-gray-700"><h2 class="text-xl font-semibold text-white">Control Panel Settings</h2><button id="local-settings-close-btn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>
+                <form id="local-settings-form" class="p-6 space-y-6 overflow-y-auto"><section><label for="local-theme" class="text-sm font-medium text-gray-300">Theme</label><select id="local-theme" name="theme" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"><option value="dark">Dark (Default)</option><option value="light">Light</option><option value="high-contrast">High-Contrast Dark</option></select></section><section><label class="text-sm font-medium text-gray-300">Panel Layout</label><div class="flex space-x-4 mt-2"><label class="flex items-center space-x-2"><input type="radio" name="layout" value="wide" class="h-4 w-4 bg-gray-900 border-gray-600 text-blue-500 focus:ring-blue-500"><span class="text-sm text-gray-300">Wide (Side-by-Side)</span></label><label class="flex items-center space-x-2"><input type="radio" name="layout" value="tall" class="h-4 w-4 bg-gray-900 border-gray-600 text-blue-500 focus:ring-blue-500"><span class="text-sm text-gray-300">Tall (Stacked)</span></label></div></section><section><label class="text-sm font-medium text-gray-300">Log Settings</label><div class="space-y-3 mt-2"><div class="flex items-center space-x-3"><input type="checkbox" id="local-compact-log" name="compactLog" class="h-4 w-4 bg-gray-900 border border-gray-600 rounded-sm text-blue-500 focus:ring-blue-500"><label for="local-compact-log" class="text-sm text-gray-300">Use Compact Log View</label></div><div><label for="local-log-font-size" class="text-sm font-medium text-gray-300">Log Font Size</label><select id="local-log-font-size" name="logFontSize" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-4 py-2 mt-1"><option value="sm">Small</option><option value="md">Medium</option><option value="lg">Large</option></select></div></div></section><section><label class="text-sm font-medium text-gray-300">Feedback & Safety</label><div class="space-y-3 mt-2"><div class="flex items-center space-x-3"><input type="checkbox" id="local-audio-cues" name="audioCues" class="h-4 w-4 bg-gray-900 border border-gray-600 rounded-sm text-blue-500 focus:ring-blue-500"><label for="local-audio-cues" class="text-sm text-gray-300">Enable Audio Cues</label></div><div class="flex items-center space-x-3"><input type="checkbox" id="local-confirm-global-reset" name="confirmGlobalReset" class="h-4 w-4 bg-gray-900 border border-gray-600 rounded-sm text-blue-500 focus:ring-blue-500"><label for="local-confirm-global-reset" class="text-sm text-gray-300">Confirm Global Reset</label></div></div></section></form>
+                <div class="p-4 bg-gray-900 border-t border-gray-700 flex justify-between items-center"><span id="local-settings-toast" class="text-sm text-green-400 opacity-0 transition-opacity duration-500">Saved!</span><button id="local-settings-save-btn" class="w-full max-w-xs bg-blue-600 hover:opacity-90 text-white font-bold py-2 px-4 rounded-sm">Save Local Settings</button></div>
+            </div>
+        </div>
+
+        <div id="macro-modal" class="hidden fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <div class="w-full max-w-2xl bg-gray-800 border border-gray-700 rounded-sm shadow-2xl flex flex-col max-h-[90vh]">
+                <div class="flex justify-between items-center p-4 border-b border-gray-700"><h2 class="text-xl font-semibold text-white" id="macro-modal-title">Configure Macro Sequence</h2><button id="macro-close-btn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>
+                <form id="macro-form" class="flex flex-col h-full overflow-hidden"><input type="hidden" id="macro-id"><div class="p-4 bg-gray-800/80 border-b border-gray-700"><label class="text-sm font-medium text-gray-300 block mb-1">Macro Label</label>
+                        <input type="text" name="label" required placeholder="e.g. Touchdown Home" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-3 py-2">
+                        <div class="mt-2">
+                            <label class="text-xs font-medium text-gray-400 block mb-1">Macro Scope</label>
+                            <select id="macro-scope" class="w-full bg-gray-900 border border-gray-600 text-white rounded-sm px-2 py-1 text-xs">
+                                <option value="shared">Channel Shared</option>
+                                <option value="personal">Channel Personal</option>
+                                <option value="local">Locally Saved</option>
+                            </select>
+                        </div></div><div class="flex-grow overflow-y-auto p-4 space-y-3 bg-gray-900/30" id="macro-actions-container"></div><div class="p-4 bg-gray-800 border-t border-gray-700 space-y-3"><div class="flex space-x-2"><select id="macro-add-action-select" class="flex-grow bg-gray-900 border border-gray-600 text-white text-sm rounded-sm px-3 py-2"><option value="clock">Add: Set Clock</option><option value="quarter">Add: Set Quarter</option><option value="score">Add: Adjust Score</option><option value="graphic">Add: Graphic Control</option><option value="possession">Add: Set Possession</option><option value="log">Add: Log Event</option></select><button type="button" id="macro-add-action-btn" class="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded-sm text-sm">+ Add Action</button></div><hr class="border-gray-700" /><div class="flex justify-between"><button type="button" id="macro-delete-btn" class="hidden px-4 py-2 bg-red-900/50 hover:bg-red-800 text-red-200 rounded-sm border border-red-800 text-sm">Delete Macro</button><button type="submit" class="flex-grow ml-auto bg-blue-600 hover:opacity-90 text-white font-bold py-2 px-6 rounded-sm">Save Sequence</button></div></div></form>
+            </div>
+        </div>
+        
+        <div id="license-modal" class="hidden fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+            <div class="w-full max-w-md bg-gray-800 border border-yellow-500/50 rounded-sm shadow-2xl relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-yellow-400 to-yellow-600"></div>
+                <div class="p-6 space-y-4">
+                    <div class="flex justify-between items-center"><h2 class="text-xl font-bold text-white flex items-center"><span class="text-yellow-400 mr-2">★</span> Unlock Pro Features</h2><button id="license-close-btn" class="text-gray-400 hover:text-white text-2xl">&times;</button></div>
+                    <p class="text-gray-300 text-sm">Creating new broadcast channels requires an active license key.</p>
+                    <form id="license-form" class="space-y-3"><div><label class="text-xs font-bold text-gray-400 uppercase tracking-wider">License Key</label><input type="text" id="license-key-input" placeholder="XXXX-XXXX-XXXX-XXXX" class="w-full bg-gray-900 border border-gray-600 text-white font-mono text-center text-lg rounded-sm px-4 py-3 mt-1 uppercase"></div><button type="submit" class="w-full bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-black font-bold py-3 px-4 rounded-sm shadow-lg transform transition-transform active:scale-95">Activate License</button></form>
+                </div>
+            </div>
+        </div>
+
+        <div id="confirm-modal" class="hidden fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <div class="w-full max-w-md bg-gray-800 border border-gray-700 rounded-sm shadow-2xl">
+                <div class="p-6">
+                    <h2 class="text-xl font-semibold text-white">Are you sure?</h2>
+                    <p id="confirm-modal-text" class="text-gray-300 mt-2 mb-6">This action cannot be undone.</p>
+                    <div class="flex justify-end space-x-4">
+                        <button id="confirm-modal-cancel-btn" class="bg-gray-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-sm">Cancel</button>
+                        <button id="confirm-modal-confirm-btn" class="bg-red-600 hover:opacity-90 text-white font-bold py-2 px-4 rounded-sm">Confirm</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    
+    <div id="message-toast" class="fixed bottom-4 right-4 z-[100] p-4 rounded-lg text-white font-medium shadow-2xl transition-all duration-300 ease-out translate-y-20 opacity-0"><span id="message-toast-text">Message</span></div>
+    <button id="cp-deploy-live-btn" class="hidden fixed bottom-6 left-6 z-40 bg-green-600 hover:opacity-90 text-white font-bold uppercase py-4 px-6 rounded-sm shadow-2xl transition-all duration-200 ease-in-out transform hover:scale-105">DEPLOY LIVE</button>
+
+    <script>
+    (function(){
+        if (typeof CP === 'undefined') return;
+        if (!CP.localState) CP.localState = {};
+        if (!Array.isArray(CP.localState.stagedFields)) CP.localState.stagedFields = [];
+        if (!Array.isArray(CP.localState.stagedEvents)) CP.localState.stagedEvents = [];
+
+        const style = document.createElement('style');
+        style.innerHTML = `.staged { background: linear-gradient(90deg, rgba(250,240,170,0.08), rgba(250,240,170,0.03)) !important; border-color: rgba(250,240,170,0.25) !important; }`;
+        document.head.appendChild(style);
+
+        function refreshUI(){
+            if (typeof updateControlPanelUI === 'function') updateControlPanelUI();
+            renderStagedFieldsUI();
+            if (typeof updateStagedEventsUI === 'function') updateStagedEventsUI();
+        }
+
+        window.stageFieldChange = function(key, newValue, humanLabel, meta = {}){
+            const { silent = false, mode = null, delta = null } = meta || {};
+            const prevLive = (CP.globalState && Object.prototype.hasOwnProperty.call(CP.globalState, key)) ? CP.globalState[key] : undefined;
+            CP.localState[key] = newValue;
+            const stagedList = CP.localState.stagedFields || [];
+            const updatedItem = { key, newValue, prevValue: prevLive, label: humanLabel || key, mode, delta, timestamp: Date.now() };
+            const existingIdx = stagedList.findIndex((f) => f.key === key);
+            if (existingIdx >= 0) stagedList[existingIdx] = updatedItem; else stagedList.push(updatedItem);
+            CP.localState.stagedFields = stagedList;
+            if (!silent) showToast(`${humanLabel || key} staged.`, false);
+            refreshUI();
+        };
+
+        window.stageScoreUpdate = function(team, points){
+            const key = (team === 'A' || team === 'Home') ? 'scoreA' : 'scoreB';
+            const prev = Number(CP.localState[key] || 0);
+            const newScore = Math.max(0, prev + Number(points || 0));
+            const teamName = key === 'scoreA' ? (CP.localState.teamAName || 'Home') : (CP.localState.teamBName || 'Away');
+            stageFieldChange(key, newScore, `${teamName} Score`, { mode: 'adjust', delta: Number(points || 0) });
+        };
+
+        window.stageGraphicAction = function({ operation = 'show', title = '', subtitle = '', duration = 0 } = {}){
+            const safeTitle = title || '';
+            const safeSubtitle = subtitle || '';
+            if (operation === 'hide') {
+                CP.localState.graphicDuration = 0;
+                stageFieldChange('activeGraphic', null, 'Graphic');
+                addStagedEvent('graphic', 'Graphic Hide', { stagedField: true }, 'public');
+            } else {
+                const payload = { title: safeTitle, subtitle: safeSubtitle };
+                CP.localState.graphicDuration = duration;
+                stageFieldChange('activeGraphic', payload, 'Graphic');
+                addStagedEvent('graphic', `Graphic Show: ${safeTitle || 'Untitled'}`, { title: safeTitle, subtitle: safeSubtitle, duration, stagedField: true }, 'public');
+            }
+            renderStagedFieldsUI();
+            updateStagedEventsUI();
+        };
+
+        window.stagePossessionAction = function(value){
+            const next = (value === 'teamA' || value === 'teamB') ? value : 'none';
+            stageFieldChange('possession', next, 'Possession');
+            const possText = next === 'teamA' ? CP.localState.teamAName : next === 'teamB' ? CP.localState.teamBName : 'None';
+            addStagedEvent('possession', `Possession: ${possText}`, { team: next, stagedField: true }, 'public');
+        };
+
+        window.renderStagedFieldsUI = function(){
+            const stagingArea = document.getElementById('cp-staging-area');
+            if (!stagingArea) return;
+            let container = document.getElementById('cp-staged-fields');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'cp-staged-fields';
+                container.className = 'mb-4';
+                stagingArea.insertBefore(container, stagingArea.firstChild);
+            }
+            container.innerHTML = '';
+            const fields = (CP.localState.stagedFields || []).sort((a,b)=>a.timestamp-b.timestamp);
+            if (fields.length === 0) {
+                container.innerHTML = '<div class="text-sm text-gray-400 italic p-2">No field changes staged.</div>';
+                return;
+            }
+            const ul = document.createElement('ul');
+            ul.className = 'space-y-2';
+            fields.forEach((item, idx) => {
+                const li = document.createElement('li');
+                li.className = 'flex items-center justify-between bg-gray-900/30 p-2 rounded';
+                const left = document.createElement('div');
+                left.innerHTML = `<div class="text-sm font-medium text-yellow-400">${item.label}</div><div class="text-xs text-gray-300 truncate">${JSON.stringify(item.prevValue)} → ${JSON.stringify(item.newValue)}</div>`;
+                const right = document.createElement('div');
+                right.className = 'flex items-center space-x-2';
+                const undoBtn = document.createElement('button');
+                undoBtn.className = 'text-red-400 px-2 py-1 text-sm bg-red-900/30 rounded';
+                undoBtn.innerText = 'X';
+                undoBtn.title = 'Undo staged change';
+                undoBtn.onclick = function(){
+                    CP.localState[item.key] = item.prevValue;
+                    CP.localState.stagedFields = (CP.localState.stagedFields || []).filter((_, i) => i !== idx);
+                    refreshUI();
+                    showToast(`Reverted: ${item.label}`, false);
+                };
+                right.appendChild(undoBtn);
+                li.appendChild(left);
+                li.appendChild(right);
+                ul.appendChild(li);
+            });
+            container.appendChild(ul);
+        };
+
+        window.deployLiveChanges = async function(){
+            const stagedFields = CP.localState.stagedFields || [];
+            const stagedEvents = CP.localState.stagedEvents || [];
+            if (stagedFields.length === 0 && stagedEvents.length === 0) { showToast('No staged items to deploy.', true); return; }
+
+            const payload = {};
+            stagedFields.forEach((f) => { payload[f.key] = f.newValue; });
+            if (Object.keys(payload).length > 0) {
+                try { await updateMainDoc(payload); CP.globalState = { ...(CP.globalState || {}), ...payload }; } catch(e){ console.error('Deploy update failed', e); showToast('Error deploying fields.', true); return; }
+            }
+
+            const nowTS = (typeof serverTimestamp === 'function') ? serverTimestamp() : new Date();
+            for (const f of stagedFields) {
+                if (f.key === 'scoreA' || f.key === 'scoreB') {
+                    const teamName = f.key === 'scoreA' ? (CP.localState.teamAName || 'Home') : (CP.localState.teamBName || 'Away');
+                    const prevScore = Number(f.prevValue || 0);
+                    const nextScore = Number(f.newValue || 0);
+                    const delta = nextScore - prevScore;
+                    const message = f.mode === 'set' ? `${teamName}: score set to ${nextScore}` : `${teamName}: ${delta > 0 ? '+' + delta : delta}`;
+                    if (CP.eventsCollectionRef) await addDoc(CP.eventsCollectionRef, { type: 'score', text: message, data: { team: f.key === 'scoreA' ? 'A' : 'B', value: nextScore, delta }, timestamp: nowTS });
+                }
+            }
+
+            for (const ev of stagedEvents) {
+                const targetCollection = ev.collection === 'operator' ? CP.operatorLogCollectionRef : CP.eventsCollectionRef;
+                if (targetCollection) await addDoc(targetCollection, { type: ev.type || 'event', text: ev.text || '', data: ev.data || {}, timestamp: nowTS });
+            }
+
+            CP.localState.stagedFields = [];
+            CP.localState.stagedEvents = [];
+            refreshUI();
+            showToast('Deployed live.', false);
+        };
+
+        document.addEventListener('DOMContentLoaded', renderStagedFieldsUI);
+    })();
+    </script>
+
+</body>
+</html>
